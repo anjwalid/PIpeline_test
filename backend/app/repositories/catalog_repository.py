@@ -5,6 +5,111 @@ from app.core.database import get_connection
 
 class CatalogRepository:
     @staticmethod
+    def list_references():
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id_reference,
+                        reference_menace,
+                        nom_reference,
+                        lien
+                    FROM reference_menace
+                    ORDER BY LOWER(nom_reference), LOWER(reference_menace), id_reference
+                    """
+                )
+                return cur.fetchall()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def list_reference_groups():
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        LOWER(r.nom_reference) AS normalized_name,
+                        MIN(r.nom_reference) AS display_name,
+                        COUNT(*) AS code_count,
+                        COUNT(DISTINCT mr.id_menace) AS threat_count,
+                        ARRAY_AGG(r.reference_menace ORDER BY LOWER(r.reference_menace), r.id_reference) AS reference_codes
+                    FROM reference_menace r
+                    LEFT JOIN menace_reference mr ON mr.id_reference = r.id_reference
+                    GROUP BY LOWER(r.nom_reference)
+                    ORDER BY LOWER(MIN(r.nom_reference))
+                    """
+                )
+                return cur.fetchall()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def create_reference(payload: Dict[str, Any]):
+        conn = get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO reference_menace (reference_menace, nom_reference, lien)
+                        VALUES (%s, %s, %s)
+                        RETURNING id_reference, reference_menace, nom_reference, lien
+                        """,
+                        (
+                            payload["reference_menace"].strip(),
+                            payload["nom_reference"].strip(),
+                            payload.get("lien"),
+                        ),
+                    )
+                    return cur.fetchone()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_reference(reference_id: int, payload: Dict[str, Any]):
+        conn = get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE reference_menace
+                        SET reference_menace = %s,
+                            nom_reference = %s,
+                            lien = %s
+                        WHERE id_reference = %s
+                        RETURNING id_reference, reference_menace, nom_reference, lien
+                        """,
+                        (
+                            payload["reference_menace"].strip(),
+                            payload["nom_reference"].strip(),
+                            payload.get("lien"),
+                            reference_id,
+                        ),
+                    )
+                    return cur.fetchone()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def delete_reference(reference_id: int):
+        conn = get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM reference_menace WHERE id_reference = %s",
+                        (reference_id,),
+                    )
+                    return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    @staticmethod
     def list_threats():
         conn = get_connection()
         try:

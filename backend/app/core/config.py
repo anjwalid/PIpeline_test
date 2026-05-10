@@ -13,6 +13,8 @@ class Settings:
     MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-medium-latest")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_JUDGE_MODEL: str = os.getenv("OLLAMA_JUDGE_MODEL", "tensortemplar/prometheus2:7b-fp16")
     MINIO_ENDPOINT: str = os.getenv("ENDPOINT", "")
     MINIO_ACCESS_KEY: str = os.getenv("ACCESS_KEY", "")
     MINIO_SECRET_KEY: str = os.getenv("SECRET_KEY", "")

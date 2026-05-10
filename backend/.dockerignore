@@ -1,8 +1,12 @@
-venv
-__pycache__
+.git
 .pytest_cache
-.mypy_cache
+__pycache__
 *.pyc
 *.pyo
 *.pyd
+
 .env
+venv
+
+resources/out
+resources/pdf

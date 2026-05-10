@@ -5,6 +5,26 @@ from app.repositories.catalog_repository import CatalogRepository
 
 class CatalogService:
     @staticmethod
+    def list_references():
+        return CatalogRepository.list_references()
+
+    @staticmethod
+    def list_reference_groups():
+        return CatalogRepository.list_reference_groups()
+
+    @staticmethod
+    def create_reference(payload: Dict[str, Any]):
+        return CatalogRepository.create_reference(payload)
+
+    @staticmethod
+    def update_reference(reference_id: int, payload: Dict[str, Any]):
+        return CatalogRepository.update_reference(reference_id, payload)
+
+    @staticmethod
+    def delete_reference(reference_id: int):
+        return CatalogRepository.delete_reference(reference_id)
+
+    @staticmethod
     def list_threats():
         return CatalogRepository.list_threats()
 

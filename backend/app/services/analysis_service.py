@@ -13,6 +13,7 @@ from app.services.llm_clients import (
     call_mistral,
     clean_text_response,
     extract_json_object,
+    validate_model_output_with_judge,
 )
 from app.services.prompts import (
     APPLICATION_DESCRIPTION_PROMPT,
@@ -309,6 +310,23 @@ class AnalysisService:
                     context_bundle=context_bundle,
                 )
                 logger.info("Description applicative generee: analysis_id=%s", analysis_id)
+                # Exemple d activation LLM-as-a-Judge via modele local Ollama/Prometheus.
+                # judge_description = validate_model_output_with_judge(
+                #     task_name="Validation description applicative",
+                #     context_text=context_bundle["context_text"],
+                #     candidate_output=generated_description,
+                #     evaluation_focus=(
+                #         "Verifier que la description est fidele au contexte questionnaire, "
+                #         "sans hallucination ni ajout de composants absents."
+                #     ),
+                # )
+                # logger.info(
+                #     "LLM Judge description: analysis_id=%s valid=%s score=%s decision=%s",
+                #     analysis_id,
+                #     judge_description["is_valid"],
+                #     judge_description["score"],
+                #     judge_description["decision"],
+                # )
             except Exception as exc:
                 logger.exception("Echec generation description applicative")
                 raise AnalysisStepError(
@@ -350,6 +368,26 @@ class AnalysisService:
                     generated_description=generated_description,
                     context_bundle=context_bundle,
                 )
+                # Exemple d activation LLM-as-a-Judge sur la sortie threat modeling.
+                # judge_threats = validate_model_output_with_judge(
+                #     task_name="Validation des menaces retenues",
+                #     context_text=(
+                #         f"{context_bundle['context_text']}\n\n"
+                #         f"Description consolidee :\n{generated_description}"
+                #     ),
+                #     candidate_output=gemini_result,
+                #     evaluation_focus=(
+                #         "Verifier que les menaces, scenarios et mitigations sont cohérents "
+                #         "avec le contexte applicatif et qu il n y a pas d hallucination."
+                #     ),
+                # )
+                # logger.info(
+                #     "LLM Judge threats: analysis_id=%s valid=%s score=%s decision=%s",
+                #     analysis_id,
+                #     judge_threats["is_valid"],
+                #     judge_threats["score"],
+                #     judge_threats["decision"],
+                # )
                 selected_threats = AnalysisService._normalize_selected_threats(gemini_result)
                 logger.info(
                     "Analyse menaces terminee: analysis_id=%s threat_count=%s",
@@ -378,6 +416,8 @@ class AnalysisService:
                     generated_description=generated_description,
                     selected_threats=selected_threats,
                     dfd_image_path=dfd_image_path,
+                    dfd_reference="DFD-01",
+                    application_version="v1",
                     report_file_name=report_file_name,
                 )
                 logger.info("PDF rapport genere: analysis_id=%s path=%s", analysis_id, report_path)
@@ -398,6 +438,22 @@ class AnalysisService:
                 generated_by=generated_by,
             )
             logger.info("Rapport persiste: analysis_id=%s report_id=%s", analysis_id, report.id)
+
+            ReportManagementService.create_report_results_record(
+                report_id=report.id,
+                app_name=app_name,
+                developer_name=analyst_name,
+                application_description=generated_description,
+                selected_threats=selected_threats,
+                dfd_image_path=dfd_image_path,
+                dfd_reference="DFD-01",
+                generated_by=generated_by,
+            )
+            logger.info(
+                "Resultats rapport persistes: analysis_id=%s report_id=%s",
+                analysis_id,
+                report.id,
+            )
 
             try:
                 AnalysisRepository.update_analysis_status(analysis_id, "completed")

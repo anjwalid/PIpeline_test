@@ -9,6 +9,7 @@ from app.api.admin_questionnaire import router as admin_questionnaire_router
 from app.api.analysis import router as analysis_router
 from app.api.questionnaire import router as questionnaire_router
 from app.api.reports import router as reports_router
+from app.services.report_management_service import ReportManagementService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 app = FastAPI(title="AWB Backend", version="1.0.0")
+
+
+@app.on_event("startup")
+def startup_prepare_schema():
+    ReportManagementService.ensure_schema()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

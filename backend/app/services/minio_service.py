@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from minio import Minio
 from minio.error import S3Error
 from urllib.parse import urlparse
@@ -89,6 +90,90 @@ class MinioService:
             "object_key": object_key,
             "file_size": file_obj.stat().st_size,
         }
+
+    @staticmethod
+    def upload_bytes(
+        *,
+        data: bytes,
+        object_key: str,
+        content_type: str,
+    ) -> dict:
+        client = MinioService._client()
+        bucket = settings.MINIO_BUCKET
+
+        MinioService.ensure_bucket_exists()
+
+        try:
+            from io import BytesIO
+
+            payload = BytesIO(data)
+            client.put_object(
+                bucket,
+                object_key,
+                payload,
+                length=len(data),
+                content_type=content_type,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Echec upload bytes MinIO bucket='{bucket}' object_key='{object_key}': {exc}"
+            ) from exc
+
+        return {
+            "bucket": bucket,
+            "object_key": object_key,
+            "file_size": len(data),
+        }
+
+    @staticmethod
+    def build_minio_uri(bucket: str, object_key: str) -> str:
+        return f"minio://{bucket}/{object_key.lstrip('/')}"
+
+    @staticmethod
+    def parse_minio_uri(uri: str) -> tuple[str, str] | None:
+        if not uri or not uri.startswith("minio://"):
+            return None
+
+        parsed = urlparse(uri)
+        bucket = parsed.netloc
+        object_key = parsed.path.lstrip("/")
+        if not bucket or not object_key:
+            return None
+        return bucket, object_key
+
+    @staticmethod
+    def download_object_to_temp_file(
+        *,
+        bucket_name: str,
+        object_key: str,
+        suffix: str = "",
+    ) -> str:
+        client = MinioService._client()
+        response = None
+
+        try:
+            response = client.get_object(bucket_name, object_key)
+            with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+                for chunk in response.stream(64 * 1024):
+                    if chunk:
+                        temp_file.write(chunk)
+                temp_path = temp_file.name
+        except Exception as exc:
+            raise RuntimeError(
+                f"Echec telechargement MinIO bucket='{bucket_name}' object_key='{object_key}': {exc}"
+            ) from exc
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
+            try:
+                if hasattr(response, "release_conn"):
+                    response.release_conn()
+            except Exception:
+                pass
+
+        return temp_path
 
     @staticmethod
     def get_object(bucket_name: str, object_key: str):

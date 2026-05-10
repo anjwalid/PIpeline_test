@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Document de Securite Technique - {{ application_name | default('') }}</title>
+<style>
+  @page cover {
+    size: A4;
+    margin: 0;
+  }
+
+  @page content {
+    size: A4;
+    margin: 22mm 22mm 18mm 24mm;
+
+    @top-center {
+      content: element(page-header);
+    }
+
+    @bottom-center {
+      content: element(page-footer);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    color: #000000;
+    font-family: Arial, Calibri, sans-serif;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .running-header {
+    position: running(page-header);
+    height: 12mm;
+    font-size: 0;
+  }
+
+  .running-header .head-wrap {
+    position: relative;
+    height: 12mm;
+  }
+
+  .running-header .head-bg {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 103mm;
+    height: 12mm;
+    background: #fff2cc;
+  }
+
+  .running-header .left-title {
+    position: absolute;
+    top: 3mm;
+    left: 0;
+    width: 70mm;
+    height: 5mm;
+    background: #f2f2f2;
+    color: #777777;
+    font-size: 6.7pt;
+    font-weight: 700;
+    text-align: center;
+    line-height: 5mm;
+  }
+
+  .running-header .sys {
+    position: absolute;
+    top: 3.1mm;
+    right: 17mm;
+    width: 65mm;
+    height: 5mm;
+    background: #d9d9d9;
+    border: 1mm solid #ffffff;
+    color: #555555;
+    font-size: 5.8pt;
+    font-weight: 700;
+    text-align: right;
+    line-height: 3.2mm;
+    padding-right: 2mm;
+  }
+
+  .running-header .yellow-top {
+    position: absolute;
+    top: 1.5mm;
+    right: 1mm;
+    width: 42mm;
+    border-top: 1.7mm solid #ffd966;
+  }
+
+  .running-footer {
+    position: running(page-footer);
+    height: 6mm;
+    color: #777777;
+    font-size: 6.3pt;
+  }
+
+  .running-footer .foot-wrap {
+    position: relative;
+    height: 6mm;
+  }
+
+  .running-footer .classif {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    white-space: nowrap;
+  }
+
+  .running-footer .mini {
+    position: absolute;
+    left: 31mm;
+    right: 26mm;
+    bottom: 0;
+    display: grid;
+    grid-template-columns: 26mm 26mm 14mm 32mm;
+  }
+
+  .running-footer .mini span {
+    border: 1px solid #e5e5e5;
+    text-align: center;
+    height: 4mm;
+    line-height: 4mm;
+  }
+
+  .running-footer .page-no {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    min-width: 22mm;
+    padding: 0.5mm 4mm;
+    background: #ffd966;
+    color: #444444;
+    font-weight: 700;
+    text-align: center;
+  }
+
+  .running-footer .page-no::after {
+    content: "Page " counter(page) "/" counter(pages);
+  }
+
+  .page {
+    background: #ffffff;
+  }
+
+  .cover {
+    page: cover;
+    position: relative;
+    width: 210mm;
+    height: 297mm;
+    overflow: hidden;
+    break-after: page;
+  }
+
+  .cover-bg {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 86mm;
+    height: 100%;
+    display: block;
+    z-index: 0;
+    overflow: hidden;
+  }
+
+  .cover-bg-main {
+    position: absolute;
+    left: -8mm;
+    top: -2mm;
+    width: 66mm;
+    height: 304mm;
+    background: linear-gradient(180deg, #ffbf00 0%, #f7ae00 56%, #ffbf00 100%);
+    border-top-right-radius: 34mm 72mm;
+    border-bottom-right-radius: 24mm 58mm;
+  }
+
+  .cover-bg-cut {
+    position: absolute;
+    left: 20mm;
+    top: -6mm;
+    width: 24mm;
+    height: 284mm;
+    background: #ffffff;
+    border-top-left-radius: 22mm 50mm;
+    border-top-right-radius: 22mm 50mm;
+    border-bottom-left-radius: 22mm 50mm;
+    border-bottom-right-radius: 22mm 50mm;
+    transform: rotate(7deg);
+    opacity: 1;
+  }
+
+  .cover-bg-accent {
+    position: absolute;
+    left: 40mm;
+    top: -4mm;
+    width: 18mm;
+    height: 286mm;
+    background: linear-gradient(180deg, #ffad42 0%, #f39a2f 100%);
+    border-top-left-radius: 18mm 48mm;
+    border-top-right-radius: 10mm 30mm;
+    border-bottom-left-radius: 10mm 34mm;
+    border-bottom-right-radius: 18mm 46mm;
+    transform: rotate(7deg);
+  }
+
+  .cover-bg-line-grey,
+  .cover-bg-line-orange {
+    position: absolute;
+    top: -2mm;
+    height: 304mm;
+    border-radius: 999px;
+    transform: rotate(9deg);
+    background: transparent;
+  }
+
+  .cover-bg-line-grey {
+    left: 56mm;
+    width: 0;
+    border-left: 0.35mm solid #a7a7a7;
+    opacity: 0.95;
+  }
+
+  .cover-bg-line-orange {
+    left: 60mm;
+    width: 0;
+    border-left: 0.35mm solid #f0a15a;
+    opacity: 0.95;
+  }
+
+  .cover-bg-bottom {
+    position: absolute;
+    left: 28mm;
+    bottom: -10mm;
+    width: 74mm;
+    height: 40mm;
+    background: linear-gradient(180deg, #ffbd00 0%, #efab00 100%);
+    border-top-left-radius: 46mm 24mm;
+    transform: rotate(0deg);
+  }
+
+  .cover-logo {
+    position: absolute;
+    right: 11mm;
+    top: 8mm;
+    width: 31mm;
+    z-index: 2;
+  }
+
+  .cover-logo img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  .right-bars {
+    position: absolute;
+    right: 3.2mm;
+    top: 6mm;
+    width: 7mm;
+    height: 176mm;
+    z-index: 1;
+  }
+
+  .right-bars .b1 { position: absolute; right: 0; top: 0; width: 2mm; height: 100%; background: #f6a623; }
+  .right-bars .b2 { position: absolute; right: 2.4mm; top: 0; width: 1.2mm; height: 100%; background: #ffd44b; opacity: 0.95; }
+  .right-bars .b3 { position: absolute; right: 4.5mm; top: 2mm; width: 0.9mm; height: 156mm; background: #ffe58a; }
+  .right-bars:before,
+  .right-bars:after {
+    content: "";
+    position: absolute;
+    left: -0.5mm;
+    width: 8mm;
+    height: 1mm;
+    background: #9e9e9e;
+  }
+
+  .right-bars:before { top: 2.5mm; }
+  .right-bars:after { top: 8mm; }
+
+  .cover-title {
+    position: absolute;
+    top: 82mm;
+    left: 66mm;
+    right: 24mm;
+    z-index: 2;
+    text-align: center;
+    font-size: 15pt;
+    font-weight: 700;
+    letter-spacing: 0.1px;
+  }
+
+  .cover-line {
+    position: absolute;
+    top: 102mm;
+    left: 71mm;
+    width: 104mm;
+    z-index: 2;
+    border-top: 1.8mm solid #ffd13d;
+  }
+
+  .cover-version {
+    position: absolute;
+    top: 194mm;
+    right: 34mm;
+    z-index: 2;
+    font-size: 10.5pt;
+    font-weight: 700;
+    font-style: italic;
+  }
+
+  .cover-date {
+    position: absolute;
+    top: 206mm;
+    right: 28mm;
+    z-index: 2;
+    font-size: 10.5pt;
+    font-weight: 700;
+    font-style: italic;
+  }
+
+  .cover-classif {
+    position: absolute;
+    left: 76mm;
+    right: 26mm;
+    bottom: 6mm;
+    z-index: 2;
+    font-size: 7.2pt;
+    color: #595959;
+    text-align: center;
+  }
+
+  .inner {
+    page: content;
+  }
+
+  .page-break {
+    break-before: page;
+  }
+
+  .doc-header,
+  .doc-footer {
+    display: none;
+  }
+
+  h1 {
+    margin: 0 0 8mm 0;
+    padding-bottom: 1.4mm;
+    border-bottom: 1.5mm solid #ffc000;
+    color: #404040;
+    font-size: 14pt;
+    text-transform: uppercase;
+    line-height: 1.1;
+  }
+
+  h2 {
+    margin: 7mm 0 3mm 0;
+    padding: 1.2mm 2mm;
+    background: #d9d9d9;
+    font-size: 13pt;
+  }
+
+  h3 {
+    margin: 5mm 0 2mm 0;
+    font-size: 11pt;
+  }
+
+  p {
+    margin: 0 0 4mm 0;
+    font-size: 10.5pt;
+    line-height: 1.35;
+  }
+
+  ul {
+    margin-top: 0;
+    font-size: 10.5pt;
+  }
+
+  table {
+    width: 100%;
+    margin: 2mm 0 5mm 0;
+    border-collapse: collapse;
+    font-size: 9pt;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr {
+    page-break-inside: avoid;
+  }
+
+  th,
+  td {
+    border: 1px solid #000000;
+    padding: 1.5mm 2mm;
+    vertical-align: top;
+  }
+
+  th {
+    background: #d9d9d9;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .version-table {
+    width: 160mm;
+  }
+
+  .toc {
+    margin-top: 2mm;
+    font-size: 9.5pt;
+  }
+
+  .toc-row {
+    margin: 3mm 0;
+  }
+
+  .toc-link::after {
+    content: leader(".") target-counter(attr(href), page);
+  }
+
+  .schema-box {
+    min-height: 70mm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    color: #777777;
+    font-style: italic;
+  }
+
+  .dfd-img {
+    max-width: 155mm;
+    max-height: 95mm;
+    object-fit: contain;
+  }
+
+  .requirements td:first-child {
+    width: 20mm;
+    font-weight: 700;
+  }
+
+  .requirements td:nth-child(3) {
+    width: 25mm;
+  }
+
+  .category td {
+    background: #f2f2f2;
+    font-weight: 700;
+  }
+</style>
+</head>
+<body>
+
+<div class="running-header">
+  <div class="head-wrap">
+    <div class="head-bg"></div>
+    <div class="yellow-top"></div>
+    <div class="left-title">DOCUMENT DE SECURITE TECHNIQUE</div>
+    <div class="sys">Systeme d Information Groupe</div>
+  </div>
+</div>
+
+<div class="running-footer">
+  <div class="foot-wrap">
+    <div class="classif">{{ company_name | default('Attijariwafa bank') }} {{ classification | default('GENERAL INTERNE GROUPE') }}</div>
+    <div class="mini">
+      <span>Version</span>
+      <span>{{ version | default('V1.0') }}</span>
+      <span>Date</span>
+      <span>{{ report_date | default('20/02/2023') }}</span>
+    </div>
+    <div class="page-no"></div>
+  </div>
+</div>
+
+<section class="page cover">
+  <div class="cover-bg" aria-hidden="true">
+    <div class="cover-bg-main"></div>
+    <div class="cover-bg-cut"></div>
+    <div class="cover-bg-accent"></div>
+    <div class="cover-bg-line-grey"></div>
+    <div class="cover-bg-line-orange"></div>
+    <div class="cover-bg-bottom"></div>
+  </div>
+  {% if logo_path %}
+  <div class="cover-logo"><img src="{{ logo_path }}" alt="Logo" /></div>
+  {% endif %}
+  <div class="right-bars"><span class="b1"></span><span class="b2"></span><span class="b3"></span></div>
+  <div class="cover-title">{{ document_title | default('DOCUMENT DE SECURITE TECHNIQUE') }}</div>
+  <div class="cover-line"></div>
+  <div class="cover-version">{{ version | default('V1.0') }}</div>
+  <div class="cover-date">{{ report_date | default('20/02/2023') }}</div>
+  <div class="cover-classif">{{ company_name | default('Attijariwafa bank') }} {{ classification | default('GENERAL INTERNE GROUPE') }}</div>
+</section>
+
+<section class="page inner page-break" id="versions">
+  <h1>SUIVI DES VERSIONS</h1>
+  <table class="version-table">
+    <thead>
+      <tr>
+        <th style="width:22mm">Version</th>
+        <th style="width:30mm">Date</th>
+        <th>Objet de la version</th>
+        <th style="width:48mm">Par</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% if versions %}
+      {% for v in versions %}
+      <tr>
+        <td>{{ v.version }}</td>
+        <td>{{ v.date }}</td>
+        <td>{{ v.object | default(v.objet | default('')) }}</td>
+        <td>{{ v.author | default(v.par | default('')) }}</td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr>
+        <td>{{ version | default('V1.0') }}</td>
+        <td>{{ report_date | default('20/02/2023') }}</td>
+        <td>Version initiale</td>
+        <td>Securite Operationnelle</td>
+      </tr>
+    {% endif %}
+    </tbody>
+  </table>
+</section>
+
+<section class="page inner page-break" id="sommaire">
+  <h1>SOMMAIRE</h1>
+  <div class="toc">
+    <div class="toc-row">1 <a class="toc-link" href="#objectif">Objectif Du Document</a></div>
+    <div class="toc-row">2 <a class="toc-link" href="#contexte">Contexte</a></div>
+    <div class="toc-row">3 <a class="toc-link" href="#annexes">Documents Annexes</a></div>
+    <div class="toc-row">4 <a class="toc-link" href="#modelisation">Modelisation des Menaces</a></div>
+    <div class="toc-row">a. <a class="toc-link" href="#schema-menaces">Schema de Modelisation des Menaces</a></div>
+    <div class="toc-row">b. <a class="toc-link" href="#identification-menaces">Identification des Menaces</a></div>
+    <div class="toc-row">5 <a class="toc-link" href="#synthese-exigences">Synthese Des Exigences Techniques</a></div>
+  </div>
+</section>
+
+<section class="page inner page-break">
+  <h1 id="objectif">Objectif Du Document</h1>
+  <p>Ce document a pour objet de presenter les principales actions effectuees par la Securite Operationnelle durant l etude de securite. Il vise egalement a presenter un plan des actions a effectuer par les acteurs du projet pour la mise en oeuvre des exigences de securite.</p>
+
+  <h1 id="contexte">Contexte</h1>
+  <p>Ce projet a pour objectif :</p>
+  <p>{{ application_description | default('') }}</p>
+
+  <h1 id="annexes">Documents Annexes</h1>
+  <p>Les documents ci-dessous sont des annexes au document de securite technique. Ils seront livres durant differentes phases du cycle de vie du projet afin de couvrir l ensemble du perimetre de securite.</p>
+  <ul>
+    {% if annexes %}
+      {% for a in annexes %}
+      <li>{{ a }}</li>
+      {% endfor %}
+    {% else %}
+      <li>Matrice des flux</li>
+      <li>Guides de durcissement</li>
+      <li>Rapport d audit de configuration</li>
+      <li>Rapport de scan de vulnerabilites</li>
+      <li>Rapport de test d intrusion</li>
+      <li>Checklist de Validation</li>
+    {% endif %}
+  </ul>
+</section>
+
+<section class="page inner" id="modelisation">
+  <h1>Modelisation des Menaces</h1>
+  <p>La modelisation des menaces a ete realisee en se basant sur l architecture technique de l environnement cible, et selon une combinaison de methodologies reconnues de Threat Modelling, a savoir : STRIDE, PASTA et DREAD.</p>
+  <h2 id="schema-menaces">a. Schema de Modelisation des Menaces</h2>
+  <div class="schema-box">
+    {% if dfd_image %}
+    <img class="dfd-img" src="{{ dfd_image }}" alt="DFD - {{ application_name | default('application') }}" />
+    {% else %}
+    Aucun diagramme DFD n'a pu etre genere pour cette analyse.
+    {% endif %}
+  </div>
+</section>
+
+<section class="page inner">
+  <h2 id="identification-menaces">b. Identification des Menaces</h2>
+  <p>L identification des menaces a ete realisee sur la base du modele STRIDE, et du referentiel CAPEC de MITRE. Les menaces identifiees sont reparties sur six categories conformement aux recommandations.</p>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:35%">Menace</th>
+        <th>Scenarios d attaques</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if threats %}
+      {% for t in threats %}
+      <tr>
+        <td>{{ t.name | default(t.threat_name | default(t.menace | default(''))) }}</td>
+        <td>
+          {% if t.scenarios %}
+          <ul>
+            {% for sc in t.scenarios %}
+            <li>{{ sc.name | default(sc.title | default(sc.attack_scenario | default(sc.scenario | default(sc.scenario_attaque | default(sc.description | default(sc)))))) }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          {{ t.attack_scenario | default(t.scenario | default(t.scenario_attaque | default(t.description | default('')))) }}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      {% elif attack_scenarios %}
+        {% if attack_scenarios[0].threat_name is defined %}
+          {% for threat_name, scenarios in attack_scenarios | groupby('threat_name') %}
+      <tr>
+        <td>{{ threat_name }}</td>
+        <td>
+          <ul>
+            {% for s in scenarios %}
+            <li>{{ s.attack_scenario | default(s.scenario | default(s.scenario_attaque | default(s.description | default(s.risk | default(s.risque | default('')))))) }}</li>
+            {% endfor %}
+          </ul>
+        </td>
+      </tr>
+          {% endfor %}
+        {% else %}
+          {% for menace, scenarios in attack_scenarios | groupby('menace') %}
+      <tr>
+        <td>{{ menace }}</td>
+        <td>
+          <ul>
+            {% for s in scenarios %}
+            <li>{{ s.attack_scenario | default(s.scenario | default(s.scenario_attaque | default(s.description | default(s.risk | default(s.risque | default('')))))) }}</li>
+            {% endfor %}
+          </ul>
+        </td>
+      </tr>
+          {% endfor %}
+        {% endif %}
+      {% else %}
+      <tr><td>&nbsp;</td><td>•<br>•</td></tr>
+      <tr><td>&nbsp;</td><td>•<br>•</td></tr>
+      <tr><td>&nbsp;</td><td>•</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</section>
+
+<section class="page inner" id="synthese-exigences">
+  <h1>Synthese Des Exigences Techniques</h1>
+  <p>Cette section resume la liste des exigences techniques de securite a mettre en oeuvre pour repondre aux menaces identifiees lors du Threat Modelling.</p>
+  <table class="requirements">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Exigence</th>
+        <th>Statut</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if requirements %}
+      {% for r in requirements %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.exigence | default(r.requirement | default('')) }}</td>
+        <td>{{ r.status | default(r.statut | default('')) }}</td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr class="category"><td>AR</td><td>Architecture et Reseaux</td><td>&nbsp;</td></tr>
+      <tr><td>AR-02</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+      <tr><td>AR-03</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+      <tr><td>AR-05</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+      <tr class="category"><td>AC</td><td>Gestion des Acces</td><td>&nbsp;</td></tr>
+      <tr><td>AC-01</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+      <tr><td>AC-02</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+      <tr><td>AC-03</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</section>
+
+</body>
+</html>

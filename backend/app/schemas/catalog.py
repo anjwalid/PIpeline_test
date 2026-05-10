@@ -5,12 +5,10 @@ from pydantic import BaseModel
 
 class CatalogMitigationPayload(BaseModel):
     description_mitigation: str
-    conditions_mitigation: Optional[str] = None
 
 
 class CatalogScenarioPayload(BaseModel):
     description_scenario: str
-    conditions_scenario: Optional[str] = None
 
 
 class CatalogReferencePayload(BaseModel):
@@ -48,6 +46,14 @@ class CatalogReferenceResponse(BaseModel):
     reference_menace: str
     nom_reference: str
     lien: Optional[str] = None
+
+
+class CatalogReferenceGroupResponse(BaseModel):
+    normalized_name: str
+    display_name: str
+    code_count: int
+    threat_count: int
+    reference_codes: List[str] = []
 
 
 class CatalogThreatResponse(BaseModel):

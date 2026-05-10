@@ -1,7 +1,11 @@
 import json
 import re
+from typing import Any
+
+import requests
 
 from app.core.config import settings
+from app.services.prompts import LLM_AS_JUDGE_PROMPT
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -90,3 +94,68 @@ def call_gemini(prompt: str) -> str:
     if not content.strip():
         raise ValueError("Gemini n a retourne aucun contenu.")
     return content.strip()
+
+
+def call_ollama(prompt: str, model: str | None = None) -> str:
+    resolved_model = (model or settings.OLLAMA_JUDGE_MODEL).strip()
+    if not resolved_model:
+        raise RuntimeError("Le modele Ollama local est manquant.")
+
+    base_url = settings.OLLAMA_BASE_URL.rstrip("/")
+    if not base_url:
+        raise RuntimeError("OLLAMA_BASE_URL est manquant.")
+
+    response = requests.post(
+        f"{base_url}/api/generate",
+        json={
+            "model": resolved_model,
+            "prompt": prompt,
+            "stream": False,
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    content = str(payload.get("response") or "").strip()
+    if not content:
+        raise ValueError("Ollama n a retourne aucun contenu.")
+    return content
+
+
+def validate_model_output_with_judge(
+    *,
+    task_name: str,
+    context_text: str,
+    candidate_output: str | dict[str, Any] | list[Any],
+    evaluation_focus: str,
+    model: str | None = None,
+) -> dict:
+    # Fonction pleinement operationnelle pour un modele local Ollama/Prometheus.
+    # Elle peut etre appelee directement dans le pipeline ou depuis un endpoint dedie.
+    serialized_candidate: str
+    if isinstance(candidate_output, str):
+        serialized_candidate = candidate_output.strip()
+    else:
+        serialized_candidate = json.dumps(candidate_output, ensure_ascii=False, indent=2)
+
+    prompt = (
+        f"{LLM_AS_JUDGE_PROMPT}\n\n"
+        f"Tache evaluee :\n{task_name}\n\n"
+        f"Focus d evaluation :\n{evaluation_focus}\n\n"
+        f"Contexte de reference :\n{context_text}\n\n"
+        f"Reponse candidate a evaluer :\n{serialized_candidate}\n"
+    )
+
+    raw_judgement = call_ollama(prompt, model=model)
+    judgement = extract_json_object(raw_judgement)
+
+    return {
+        "is_valid": bool(judgement.get("is_valid")),
+        "score": int(judgement.get("score", 0)),
+        "decision": str(judgement.get("decision", "REJECTED")).strip().upper() or "REJECTED",
+        "strengths": [str(item).strip() for item in judgement.get("strengths", []) if str(item).strip()],
+        "issues": [str(item).strip() for item in judgement.get("issues", []) if str(item).strip()],
+        "reasoning": str(judgement.get("reasoning", "")).strip(),
+        "recommended_action": str(judgement.get("recommended_action", "")).strip(),
+    }
