@@ -18,6 +18,15 @@ class CatalogReferencePayload(BaseModel):
     lien: Optional[str] = None
 
 
+class InternalSecuritySolutionPayload(BaseModel):
+    nom_solution: str
+    type_solution: str
+    editeur_solution: Optional[str] = None
+    usage_securite: Optional[str] = None
+    description_solution: Optional[str] = None
+    actif: bool = True
+
+
 class CatalogThreatUpsertRequest(BaseModel):
     nom_menace: str
     description: Optional[str] = None
@@ -46,6 +55,16 @@ class CatalogReferenceResponse(BaseModel):
     reference_menace: str
     nom_reference: str
     lien: Optional[str] = None
+
+
+class InternalSecuritySolutionResponse(BaseModel):
+    id_solution: int
+    nom_solution: str
+    type_solution: str
+    editeur_solution: Optional[str] = None
+    usage_securite: Optional[str] = None
+    description_solution: Optional[str] = None
+    actif: bool
 
 
 class CatalogReferenceGroupResponse(BaseModel):

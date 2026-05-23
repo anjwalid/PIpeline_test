@@ -12,6 +12,7 @@ class AuthenticatedUser:
     username: str
     email: str | None
     display_name: str
+    roles: tuple[str, ...] = ()
 
 
 def _decode_jwt_payload(token: str) -> dict:
@@ -36,6 +37,24 @@ def _coerce_user_uuid(raw_value: str) -> uuid.UUID:
         return uuid.UUID(candidate)
     except ValueError:
         return uuid.uuid5(uuid.NAMESPACE_URL, candidate)
+
+
+def _extract_roles(payload: dict) -> tuple[str, ...]:
+    roles: list[str] = []
+
+    realm_roles = payload.get("realm_access", {}).get("roles") or []
+    if isinstance(realm_roles, list):
+        roles.extend(str(role).strip() for role in realm_roles if str(role).strip())
+
+    resource_access = payload.get("resource_access") or {}
+    if isinstance(resource_access, dict):
+        for access in resource_access.values():
+            resource_roles = (access or {}).get("roles") or []
+            if isinstance(resource_roles, list):
+                roles.extend(str(role).strip() for role in resource_roles if str(role).strip())
+
+    # Keep insertion order while removing duplicates.
+    return tuple(dict.fromkeys(roles))
 
 
 def get_optional_current_user(request: Request) -> AuthenticatedUser | None:
@@ -64,6 +83,7 @@ def get_optional_current_user(request: Request) -> AuthenticatedUser | None:
         username=username,
         email=email,
         display_name=display_name,
+        roles=_extract_roles(payload),
     )
 
 
@@ -75,3 +95,7 @@ def get_current_user(request: Request) -> AuthenticatedUser:
             detail="Session Keycloak requise.",
         )
     return user
+
+
+def user_has_role(user: AuthenticatedUser, role: str) -> bool:
+    return role in user.roles

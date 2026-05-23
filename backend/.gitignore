@@ -4,6 +4,7 @@ __pycache__/
 
 # Env
 .env
+
 venv/
 backend/venv/
 
@@ -13,3 +14,4 @@ backend/resources/pdf/
 
 # OS
 .DS_Store
+scripts/

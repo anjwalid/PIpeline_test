@@ -2,10 +2,44 @@ import json
 import re
 from typing import Any
 
+import httpx
 import requests
 
 from app.core.config import settings
 from app.services.prompts import LLM_AS_JUDGE_PROMPT
+
+
+class LlmServiceError(RuntimeError):
+    pass
+
+
+class LlmServiceTimeoutError(LlmServiceError):
+    pass
+
+
+class LlmServiceUnavailableError(LlmServiceError):
+    pass
+
+
+def _build_mistral_retry_config():
+    if settings.MISTRAL_MAX_RETRIES <= 0:
+        return None
+
+    from mistralai.client.utils.retries import BackoffStrategy, RetryConfig
+
+    # Approxime une courte fenetre de retry bornee pour les incidents transitoires.
+    max_elapsed_time = 500 + sum(500 * (2**attempt) for attempt in range(settings.MISTRAL_MAX_RETRIES))
+
+    return RetryConfig(
+        strategy="backoff",
+        backoff=BackoffStrategy(
+            initial_interval=500,
+            max_interval=5000,
+            exponent=2.0,
+            max_elapsed_time=max_elapsed_time,
+        ),
+        retry_connection_errors=True,
+    )
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -44,16 +78,44 @@ def call_mistral(prompt: str) -> str:
     except ImportError as exc:
         raise RuntimeError("La dependance mistralai est manquante dans le backend.") from exc
 
-    client = Mistral(api_key=settings.MISTRAL_API_KEY)
-    response = client.chat.complete(
-        model=settings.MISTRAL_MODEL,
-        messages=[
+    retry_config = _build_mistral_retry_config()
+
+    client_kwargs = {
+        "api_key": settings.MISTRAL_API_KEY,
+        "timeout_ms": settings.MISTRAL_TIMEOUT_MS,
+    }
+    if retry_config is not None:
+        client_kwargs["retry_config"] = retry_config
+
+    client = Mistral(**client_kwargs)
+
+    request_kwargs = {
+        "model": settings.MISTRAL_MODEL,
+        "messages": [
             {
                 "role": "user",
                 "content": prompt,
             }
         ],
-    )
+        "timeout_ms": settings.MISTRAL_TIMEOUT_MS,
+    }
+    if retry_config is not None:
+        request_kwargs["retries"] = retry_config
+
+    try:
+        response = client.chat.complete(**request_kwargs)
+    except httpx.TimeoutException as exc:
+        raise LlmServiceTimeoutError(
+            "Le modele Mistral n a pas repondu dans le delai imparti."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise LlmServiceUnavailableError(
+            "Le service Mistral est temporairement indisponible."
+        ) from exc
+    except Exception as exc:
+        raise LlmServiceUnavailableError(
+            "L appel au service Mistral a echoue."
+        ) from exc
 
     content = ""
     if getattr(response, "choices", None):

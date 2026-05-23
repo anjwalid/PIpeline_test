@@ -7,20 +7,28 @@ from collections import Counter
 
 from fastapi import HTTPException, status
 
-from app.core.auth import AuthenticatedUser
+from app.core.auth import AuthenticatedUser, user_has_role
 from app.core.exceptions import AnalysisStepError
+from app.repositories.manager_review_feedback_repository import (
+    ManagerReviewFeedbackRepository,
+)
 from app.repositories.report_repository import ReportRepository
 from app.schemas.report import (
     EditableThreat,
     ManagerDashboardMetricsResponse,
+    ManagerReviewFeedbackItem,
+    ManagerReviewFeedbackResponse,
     ReportsByMonthEntry,
     RiskyApplicationEntry,
     ReportAnnotationResponse,
     ThreatFrequencyEntry,
     ReportResultsResponse,
     ReportResponse,
+    SecOpsModificationReason,
     ReportStatusHistoryResponse,
 )
+from app.services.llm_feedback_service import LlmFeedbackService
+from app.services.audit_service import AuditService
 from app.services.minio_service import MinioService
 from app.services.report_service import build_safe_slug, generate_report_pdf
 
@@ -29,8 +37,14 @@ logger = logging.getLogger(__name__)
 
 class ReportManagementService:
     DOWNLOAD_PATH_TEMPLATE = "/reports/{report_id}/download"
-    ALLOWED_MANAGER_STATUSES = {"APPROVED", "REJECTED", "NEEDS_CHANGES"}
+    ALLOWED_STATUS_TRANSITIONS = {
+        "DRAFT": {"PENDING"},
+        "REJECTED": {"PENDING"},
+        "PENDING": {"APPROVED", "REJECTED"},
+    }
     IMMUTABLE_REPORT_STATUSES = {"APPROVED"}
+    EDITABLE_REPORT_STATUSES = {"DRAFT", "REJECTED"}
+    MANAGER_VISIBLE_STATUSES = {"PENDING", "APPROVED", "REJECTED"}
     REPORT_NOT_FOUND = "Rapport introuvable."
     REPORT_RESULTS_NOT_FOUND = (
         "Resultats de rapport introuvables. Regenerer le rapport depuis une nouvelle analyse."
@@ -39,6 +53,26 @@ class ReportManagementService:
     PDF_CONTENT_TYPE = "application/pdf"
     DEFAULT_DFD_REFERENCE = "DFD-01"
     ALLOWED_DFD_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+    SECOPS_REASON_LABELS = {
+        "INCOHERENCE_CONTEXTE_LLM": "Incoherence de contexte detectee dans la sortie LLM",
+        "MANQUE_MENACE": "Menace manquante",
+        "MENACE_HORS_CONTEXTE": "Menace hors contexte applicatif",
+        "DESCRIPTION_MENACE_INCORRECTE": "Description de menace incorrecte",
+        "SCENARIO_ATTAQUE_MANQUANT": "Scenario d'attaque manquant",
+        "SCENARIO_ATTAQUE_INCOHERENT": "Scenario d'attaque incoherent",
+        "MITIGATION_MANQUANTE": "Mitigation manquante",
+        "MITIGATION_INCOHERENTE": "Mitigation incoherente",
+        "MITIGATION_TROP_GENERIQUE": "Mitigation trop generique",
+        "DFD_INCOMPLET": "DFD incomplet",
+        "DFD_INCOHERENT": "DFD incoherent",
+        "DFD_MANQUE_FLUX": "DFD avec flux manquants",
+        "DFD_MANQUE_COMPOSANT": "DFD avec composants manquants",
+        "DESCRIPTION_APPLICATIVE_INCOMPLETE": "Description applicative incomplete",
+        "DESCRIPTION_APPLICATIVE_INCOHERENTE": "Description applicative incoherente",
+        "AUTRE": "Autre motif",
+    }
+    SECOPS_ROLE = "secops_engineer"
+    MANAGER_ROLE = "manager"
 
     @staticmethod
     def ensure_schema() -> None:
@@ -52,6 +86,120 @@ class ReportManagementService:
             if text:
                 normalized.append(text)
         return normalized
+
+    @staticmethod
+    def _serialize_manager_feedback(entries: list[dict]) -> list[ManagerReviewFeedbackResponse]:
+        return [
+            ManagerReviewFeedbackResponse(
+                id=entry["id"],
+                decision_type=entry["decision_type"],
+                reason_code=entry["reason_code"],
+                severity=entry.get("severity"),
+                section_type=entry.get("section_type") or "GLOBAL",
+                section_identifier=entry.get("section_identifier"),
+                comment=entry.get("comment"),
+                created_by=str(entry["created_by"]) if entry.get("created_by") else None,
+                created_by_username=entry.get("created_by_username"),
+                created_by_email=entry.get("created_by_email"),
+                created_at=entry["created_at"],
+            )
+            for entry in entries
+        ]
+
+    @staticmethod
+    def _normalize_modification_reasons(
+        reasons: list[SecOpsModificationReason] | None,
+    ) -> list[SecOpsModificationReason]:
+        normalized: list[SecOpsModificationReason] = []
+        for reason in reasons or []:
+            code = reason.reason_code.strip().upper()
+            if not code:
+                continue
+            normalized.append(
+                SecOpsModificationReason(
+                    reason_code=code,
+                    section_type=(reason.section_type or "GLOBAL").strip().upper() or "GLOBAL",
+                    section_identifier=(reason.section_identifier or "").strip() or None,
+                    comment=(reason.comment or "").strip() or None,
+                )
+            )
+        return normalized
+
+    @staticmethod
+    def _format_modification_reason_summary(
+        reasons: list[SecOpsModificationReason],
+        free_comment: str | None,
+    ) -> str:
+        parts: list[str] = []
+        for reason in reasons:
+            label = ReportManagementService.SECOPS_REASON_LABELS.get(
+                reason.reason_code, reason.reason_code
+            )
+            section = "" if reason.section_type == "GLOBAL" else f" [{reason.section_type}]"
+            detail = f" ({reason.comment})" if reason.comment else ""
+            parts.append(f"{label}{section}{detail}")
+        if free_comment:
+            parts.append(f"Commentaire libre: {free_comment.strip()}")
+        return " ; ".join(parts) if parts else "Modification manuelle des resultats du rapport."
+
+    @staticmethod
+    def _build_manager_reject_comment(
+        feedback_items: list[ManagerReviewFeedbackItem],
+        comment: str | None,
+    ) -> str:
+        explicit_comment = (comment or "").strip()
+        if explicit_comment:
+            return explicit_comment
+        labels = [item.reason_code.strip().upper() for item in feedback_items if item.reason_code.strip()]
+        if labels:
+            return "Rejet manager: " + ", ".join(labels)
+        return "Rapport rejete par le manager."
+
+    @staticmethod
+    def _ensure_editable_status(report_row: dict) -> None:
+        if report_row["status"] not in ReportManagementService.EDITABLE_REPORT_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail="Le rapport n'est modifiable qu'en brouillon ou apres rejet.",
+            )
+
+    @staticmethod
+    def _ensure_role(user: AuthenticatedUser, role: str) -> None:
+        if not user_has_role(user, role):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Vous n'etes pas autorise a effectuer cette action.",
+            )
+
+    @staticmethod
+    def _ensure_secops_role(user: AuthenticatedUser) -> None:
+        ReportManagementService._ensure_role(user, ReportManagementService.SECOPS_ROLE)
+
+    @staticmethod
+    def _ensure_manager_role(user: AuthenticatedUser) -> None:
+        ReportManagementService._ensure_role(user, ReportManagementService.MANAGER_ROLE)
+
+    @staticmethod
+    def _ensure_report_owner(report_row: dict, user: AuthenticatedUser) -> None:
+        if str(report_row.get("generated_by") or "") != str(user.user_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Vous n'etes pas autorise a acceder a ce rapport.",
+            )
+
+    @staticmethod
+    def _ensure_secops_access_to_report(report_row: dict, user: AuthenticatedUser) -> None:
+        ReportManagementService._ensure_secops_role(user)
+        ReportManagementService._ensure_report_owner(report_row, user)
+
+    @staticmethod
+    def _ensure_manager_access_to_report(report_row: dict, user: AuthenticatedUser) -> None:
+        ReportManagementService._ensure_manager_role(user)
+        if report_row["status"] not in ReportManagementService.MANAGER_VISIBLE_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ReportManagementService.REPORT_NOT_FOUND,
+            )
 
     @staticmethod
     def _format_application_version(version_number: int | None) -> str:
@@ -175,13 +323,31 @@ class ReportManagementService:
             actor=generated_by,
             change_reason="Version initiale generee automatiquement.",
         )
+        AuditService.log_action(
+            actor=generated_by,
+            action_type="CREATE_REPORT_RESULTS",
+            entity_type="report_results",
+            entity_id=report_id,
+            entity_label=row["app_name"],
+            parent_entity_type="report",
+            parent_entity_id=report_id,
+            new_values={
+                "app_name": row["app_name"],
+                "developer_name": row["developer_name"],
+                "version_number": 1,
+                "threat_count": len(normalized_threats),
+                "dfd_reference": normalized_dfd_reference,
+            },
+        )
         return ReportManagementService._serialize_report_results(row)
 
     @staticmethod
-    def get_report_results(report_id: str) -> ReportResultsResponse:
+    def get_report_results(report_id: str, user: AuthenticatedUser) -> ReportResultsResponse:
         report_row = ReportRepository.get_report_by_id(report_id)
         if not report_row:
             raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+
+        ReportManagementService._ensure_secops_access_to_report(report_row, user)
 
         row = ReportRepository.get_report_results(report_id)
         if not row:
@@ -203,15 +369,19 @@ class ReportManagementService:
         dfd_image_path: str | None,
         dfd_reference: str | None,
         actor: AuthenticatedUser,
+        modification_reasons: list[SecOpsModificationReason] | None = None,
+        modification_comment: str | None = None,
     ) -> ReportResultsResponse:
         report_row = ReportRepository.get_report_by_id(report_id)
         if not report_row:
             raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+        ReportManagementService._ensure_secops_access_to_report(report_row, actor)
         if report_row["status"] in ReportManagementService.IMMUTABLE_REPORT_STATUSES:
             raise HTTPException(
                 status_code=400,
                 detail="Le rapport est valide. Aucune modification n'est autorisee.",
             )
+        ReportManagementService._ensure_editable_status(report_row)
 
         normalized = ReportManagementService._normalize_selected_threats(selected_threats)
         if not normalized:
@@ -244,6 +414,21 @@ class ReportManagementService:
         ):
             return ReportManagementService._serialize_report_results(existing)
 
+        normalized_reasons = ReportManagementService._normalize_modification_reasons(
+            modification_reasons
+        )
+        free_comment = (modification_comment or "").strip() or None
+        if not normalized_reasons and not free_comment:
+            raise HTTPException(
+                status_code=400,
+                detail="Precisez au moins un motif de modification SecOps.",
+            )
+
+        change_reason = ReportManagementService._format_modification_reason_summary(
+            normalized_reasons,
+            free_comment,
+        )
+
         next_version_number = int(existing.get("version_number") or 1) + 1
         updated = ReportRepository.update_report_results(
             report_id=report_id,
@@ -271,7 +456,50 @@ class ReportManagementService:
             dfd_image_path=next_dfd_image_path,
             dfd_reference=next_dfd_reference,
             actor=actor,
-            change_reason="Modification manuelle des resultats du rapport.",
+            change_reason=change_reason,
+        )
+        LlmFeedbackService.capture_report_corrections(
+            report_id=report_id,
+            previous_row=existing,
+            next_version_number=next_version_number,
+            app_name=next_app_name,
+            application_description=next_description,
+            selected_threats=normalized,
+            dfd_image_path=next_dfd_image_path,
+            dfd_reference=next_dfd_reference,
+            actor=actor,
+            correction_reason=change_reason,
+            error_type=normalized_reasons[0].reason_code if normalized_reasons else "manual_correction",
+        )
+        AuditService.log_action(
+            actor=actor,
+            action_type="UPDATE_REPORT_RESULTS",
+            entity_type="report_results",
+            entity_id=report_id,
+            entity_label=next_app_name,
+            parent_entity_type="report",
+            parent_entity_id=report_id,
+            old_values={
+                "app_name": existing.get("app_name"),
+                "developer_name": existing.get("developer_name"),
+                "application_description": existing.get("application_description"),
+                "version_number": existing.get("version_number"),
+                "selected_threats": existing.get("selected_threats"),
+                "dfd_reference": existing.get("dfd_reference"),
+            },
+            new_values={
+                "app_name": next_app_name,
+                "developer_name": next_developer_name,
+                "application_description": next_description,
+                "version_number": next_version_number,
+                "selected_threats": normalized,
+                "dfd_reference": next_dfd_reference,
+            },
+            comment=change_reason,
+            metadata={
+                "modification_reason_codes": [reason.reason_code for reason in normalized_reasons],
+                "modification_comment": free_comment,
+            },
         )
         return ReportManagementService._serialize_report_results(updated)
 
@@ -280,6 +508,7 @@ class ReportManagementService:
         report_row = ReportRepository.get_report_by_id(report_id)
         if not report_row:
             raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+        ReportManagementService._ensure_secops_access_to_report(report_row, actor)
         if report_row["status"] in ReportManagementService.IMMUTABLE_REPORT_STATUSES:
             raise HTTPException(
                 status_code=400,
@@ -355,11 +584,7 @@ class ReportManagementService:
                 "file_size": Path(pdf_path).stat().st_size,
             }
 
-        target_status = (
-            "IN_PROGRESS"
-            if report_row["status"] == "REJECTED"
-            else "PENDING_MANAGER_VALIDATION"
-        )
+        target_status = report_row["status"]
         updated_report = ReportRepository.update_report_after_regeneration(
             report_id=report_id,
             app_name=app_name,
@@ -373,7 +598,7 @@ class ReportManagementService:
             comment=(
                 "Rapport regenere apres modification des resultats."
                 if report_row["status"] != "REJECTED"
-                else "Rapport regenere apres rejet, statut repositionne a en cours."
+                else "Rapport regenere apres rejet, en attente de resoumission SecOps."
             ),
         )
         if not updated_report:
@@ -389,8 +614,27 @@ class ReportManagementService:
             dfd_reference=dfd_reference,
             version_number=int(editable_results.get("version_number") or 1),
         )
+        AuditService.log_action(
+            actor=actor,
+            action_type="REGENERATE_REPORT",
+            entity_type="report",
+            entity_id=report_id,
+            entity_label=app_name,
+            old_values={
+                "status": report_row["status"],
+                "file_name": report_row["file_name"],
+            },
+            new_values={
+                "status": updated_report["status"],
+                "file_name": updated_report["file_name"],
+            },
+            metadata={
+                "version_number": int(editable_results.get("version_number") or 1),
+                "dfd_reference": dfd_reference,
+            },
+        )
 
-        return ReportManagementService.get_report(report_id)
+        return ReportManagementService.get_report(report_id, actor)
 
     @staticmethod
     def _build_summary(description: str | None) -> str:
@@ -404,10 +648,12 @@ class ReportManagementService:
         report_row: dict,
         annotations_map: dict[str, list[dict]] | None = None,
         history_map: dict[str, list[dict]] | None = None,
+        manager_feedback_map: dict[str, list[dict]] | None = None,
     ) -> ReportResponse:
         report_id = str(report_row["id"])
         annotations = annotations_map.get(report_id, []) if annotations_map else []
         history = history_map.get(report_id, []) if history_map else []
+        manager_feedback = manager_feedback_map.get(report_id, []) if manager_feedback_map else []
 
         return ReportResponse(
             id=report_id,
@@ -450,6 +696,7 @@ class ReportManagementService:
                 )
                 for entry in history
             ],
+            manager_feedback=ReportManagementService._serialize_manager_feedback(manager_feedback),
         )
 
     @staticmethod
@@ -462,15 +709,18 @@ class ReportManagementService:
         report_id: str,
         original_file_name: str,
         file_stream,
+        actor: AuthenticatedUser,
     ) -> dict:
         report_row = ReportRepository.get_report_by_id(report_id)
         if not report_row:
             raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+        ReportManagementService._ensure_secops_access_to_report(report_row, actor)
         if report_row["status"] in ReportManagementService.IMMUTABLE_REPORT_STATUSES:
             raise HTTPException(
                 status_code=400,
                 detail="Le rapport est valide. Aucune modification n'est autorisee.",
             )
+        ReportManagementService._ensure_editable_status(report_row)
 
         extension = Path(original_file_name or "").suffix.lower()
         if extension not in ReportManagementService.ALLOWED_DFD_EXTENSIONS:
@@ -549,45 +799,93 @@ class ReportManagementService:
                 "Impossible d'enregistrer les metadonnees du rapport en base.",
                 cause=exc,
             ) from exc
+        AuditService.log_action(
+            actor=generated_by,
+            action_type="CREATE_REPORT",
+            entity_type="report",
+            entity_id=str(report_row["id"]),
+            entity_label=report_row["title"],
+            new_values={
+                "status": report_row["status"],
+                "file_name": report_row["file_name"],
+                "file_size": report_row["file_size"],
+            },
+            metadata={"minio_bucket": report_row["minio_bucket"]},
+        )
         return ReportManagementService._serialize_report(report_row)
 
     @staticmethod
     def list_my_reports(user: AuthenticatedUser) -> list[ReportResponse]:
+        ReportManagementService._ensure_secops_role(user)
         rows = ReportRepository.list_reports(generated_by=str(user.user_id))
         report_ids = [str(row["id"]) for row in rows]
         annotations_map = ReportRepository.get_annotations_for_reports(report_ids)
         history_map = ReportRepository.get_status_history_for_reports(report_ids)
+        manager_feedback_map = ManagerReviewFeedbackRepository.get_feedback_for_reports(report_ids)
         return [
-            ReportManagementService._serialize_report(row, annotations_map, history_map)
+            ReportManagementService._serialize_report(
+                row,
+                annotations_map,
+                history_map,
+                manager_feedback_map,
+            )
             for row in rows
         ]
 
     @staticmethod
-    def list_all_reports() -> list[ReportResponse]:
-        rows = ReportRepository.list_reports()
+    def list_all_reports(user: AuthenticatedUser) -> list[ReportResponse]:
+        ReportManagementService._ensure_manager_role(user)
+        rows = [
+            row for row in ReportRepository.list_reports()
+            if row["status"] in ReportManagementService.MANAGER_VISIBLE_STATUSES
+        ]
         report_ids = [str(row["id"]) for row in rows]
         annotations_map = ReportRepository.get_annotations_for_reports(report_ids)
         history_map = ReportRepository.get_status_history_for_reports(report_ids)
+        manager_feedback_map = ManagerReviewFeedbackRepository.get_feedback_for_reports(report_ids)
         return [
-            ReportManagementService._serialize_report(row, annotations_map, history_map)
+            ReportManagementService._serialize_report(
+                row,
+                annotations_map,
+                history_map,
+                manager_feedback_map,
+            )
             for row in rows
         ]
 
     @staticmethod
-    def get_report(report_id: str) -> ReportResponse:
+    def get_report(report_id: str, user: AuthenticatedUser) -> ReportResponse:
         row = ReportRepository.get_report_by_id(report_id)
         if not row:
             raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
 
+        if user_has_role(user, ReportManagementService.MANAGER_ROLE):
+            ReportManagementService._ensure_manager_access_to_report(row, user)
+        else:
+            ReportManagementService._ensure_secops_access_to_report(row, user)
+
         annotations_map = {report_id: ReportRepository.get_annotations(report_id)}
         history_map = {report_id: ReportRepository.get_status_history(report_id)}
-        return ReportManagementService._serialize_report(row, annotations_map, history_map)
+        manager_feedback_map = {
+            report_id: ManagerReviewFeedbackRepository.get_feedback_for_report(report_id)
+        }
+        return ReportManagementService._serialize_report(
+            row,
+            annotations_map,
+            history_map,
+            manager_feedback_map,
+        )
 
     @staticmethod
-    def get_download_payload(report_id: str) -> dict:
+    def get_download_payload(report_id: str, user: AuthenticatedUser) -> dict:
         report_row = ReportRepository.get_report_by_id(report_id)
         if not report_row:
             raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+
+        if user_has_role(user, ReportManagementService.MANAGER_ROLE):
+            ReportManagementService._ensure_manager_access_to_report(report_row, user)
+        else:
+            ReportManagementService._ensure_secops_access_to_report(report_row, user)
 
         if report_row["minio_bucket"] == MinioService.LOCAL_BUCKET:
             local_path = Path(report_row["minio_object_key"])
@@ -634,35 +932,138 @@ class ReportManagementService:
         new_status: str,
         actor: AuthenticatedUser,
         comment: str | None,
+        feedback_items: list[ManagerReviewFeedbackItem] | None = None,
     ) -> ReportResponse:
+        if (new_status or "").strip().upper() == "PENDING":
+            ReportManagementService._ensure_secops_role(actor)
+        else:
+            ReportManagementService._ensure_manager_role(actor)
+
         normalized_status = (new_status or "").strip().upper()
-        if normalized_status not in ReportManagementService.ALLOWED_MANAGER_STATUSES:
+        existing = ReportRepository.get_report_by_id(report_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+
+        if normalized_status == "PENDING":
+            ReportManagementService._ensure_report_owner(existing, actor)
+        else:
+            ReportManagementService._ensure_manager_access_to_report(existing, actor)
+
+        allowed_transitions = ReportManagementService.ALLOWED_STATUS_TRANSITIONS.get(
+            existing["status"],
+            set(),
+        )
+        if normalized_status not in allowed_transitions:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Statut de validation non supporte.",
+                detail="Transition de statut non supportee pour ce rapport.",
+            )
+
+        normalized_feedback = [
+            ManagerReviewFeedbackItem(
+                decision_type=(item.decision_type or normalized_status).strip().upper() or normalized_status,
+                reason_code=item.reason_code.strip().upper(),
+                severity=(item.severity or "").strip().upper() or None,
+                section_type=(item.section_type or "GLOBAL").strip().upper() or "GLOBAL",
+                section_identifier=(item.section_identifier or "").strip() or None,
+                comment=(item.comment or "").strip() or None,
+            )
+            for item in (feedback_items or [])
+            if item.reason_code.strip()
+        ]
+
+        if normalized_status == "REJECTED" and not normalized_feedback:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Le rejet manager exige au moins un motif structure.",
+            )
+
+        if normalized_status == "PENDING" and existing["status"] == "REJECTED":
+            report_results = ReportRepository.get_report_results(report_id)
+            if not report_results:
+                raise HTTPException(
+                    status_code=404,
+                    detail=ReportManagementService.REPORT_RESULTS_NOT_FOUND,
+                )
+            validated_at = existing.get("validated_at")
+            updated_at = report_results.get("updated_at")
+            if validated_at and updated_at and updated_at <= validated_at:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Corrigez le rapport avant de le resoumettre au manager.",
+                )
+
+        status_comment = comment
+        if normalized_status == "REJECTED":
+            status_comment = ReportManagementService._build_manager_reject_comment(
+                normalized_feedback,
+                comment,
+            )
+        elif normalized_status == "PENDING":
+            status_comment = (comment or "").strip() or (
+                "Rapport resoumis au manager."
+                if existing["status"] == "REJECTED"
+                else "Rapport soumis au manager."
             )
 
         updated = ReportRepository.update_report_status(
             report_id=report_id,
             new_status=normalized_status,
             actor=actor,
-            comment=comment,
+            comment=status_comment,
         )
         if not updated:
             raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
 
-        return ReportManagementService.get_report(report_id)
+        if normalized_status == "REJECTED":
+            report_results = ReportRepository.get_report_results(report_id)
+            report_version_number = (
+                int(report_results.get("version_number") or 1) if report_results else None
+            )
+            ManagerReviewFeedbackRepository.create_feedback_entries(
+                report_id=report_id,
+                report_version_number=report_version_number,
+                feedback_items=normalized_feedback,
+                actor=actor,
+            )
+
+        action_type = {
+            "PENDING": "SUBMIT_REPORT",
+            "APPROVED": "APPROVE_REPORT",
+            "REJECTED": "REJECT_REPORT",
+        }[normalized_status]
+        AuditService.log_action(
+            actor=actor,
+            action_type=action_type,
+            entity_type="report",
+            entity_id=report_id,
+            entity_label=updated["title"],
+            old_values={"status": existing["status"]},
+            new_values={"status": normalized_status},
+            comment=status_comment,
+            metadata={
+                "manager_feedback_reason_codes": [
+                    item.reason_code for item in normalized_feedback
+                ],
+            },
+        )
+
+        return ReportManagementService.get_report(report_id, actor)
 
     @staticmethod
-    def get_manager_dashboard_metrics() -> ManagerDashboardMetricsResponse:
-        reports = ReportRepository.list_reports()
+    def get_manager_dashboard_metrics(user: AuthenticatedUser) -> ManagerDashboardMetricsResponse:
+        ReportManagementService._ensure_manager_role(user)
+        reports = [
+            report for report in ReportRepository.list_reports()
+            if report["status"] in ReportManagementService.MANAGER_VISIBLE_STATUSES
+        ]
         report_ids = [str(report["id"]) for report in reports]
         results_by_report = ReportRepository.get_report_results_for_reports(report_ids)
 
         total_reports = len(reports)
         approved_reports = sum(1 for report in reports if report["status"] == "APPROVED")
         final_decisions = [
-            report for report in reports if report["status"] in {"APPROVED", "REJECTED", "NEEDS_CHANGES"}
+            report for report in reports if report["status"] in {"APPROVED", "REJECTED"}
         ]
         approval_rate = (
             round((approved_reports / len(final_decisions)) * 100, 2)

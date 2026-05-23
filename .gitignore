@@ -7,3 +7,9 @@ outputs/*
 files/*
 prompt.md
 rapport-leila-saddad-un-assistant-interne-it-1777235402.pdf
+seed_report_results.sql
+sc.ps1
+prompt1.md 
+prompt.md
+docker-compose.yml
+outputs/*

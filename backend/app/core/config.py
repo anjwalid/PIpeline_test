@@ -11,6 +11,8 @@ class Settings:
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "password")
     MISTRAL_API_KEY: str = os.getenv("MISTRAL_API_KEY", "")
     MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-medium-latest")
+    MISTRAL_TIMEOUT_MS: int = int(os.getenv("MISTRAL_TIMEOUT_MS", "90000"))
+    MISTRAL_MAX_RETRIES: int = int(os.getenv("MISTRAL_MAX_RETRIES", "2"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

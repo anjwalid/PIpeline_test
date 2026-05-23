@@ -5,6 +5,150 @@ from app.core.database import get_connection
 
 class CatalogRepository:
     @staticmethod
+    def ensure_internal_solutions_schema():
+        conn = get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS referentiel_solution_interne (
+                            id_solution BIGSERIAL PRIMARY KEY,
+                            nom_solution TEXT NOT NULL,
+                            type_solution TEXT NOT NULL,
+                            editeur_solution TEXT,
+                            usage_securite TEXT,
+                            description_solution TEXT,
+                            actif BOOLEAN NOT NULL DEFAULT TRUE,
+                            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+        finally:
+            conn.close()
+
+    @staticmethod
+    def list_internal_solutions():
+        CatalogRepository.ensure_internal_solutions_schema()
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        id_solution,
+                        nom_solution,
+                        type_solution,
+                        editeur_solution,
+                        usage_securite,
+                        description_solution,
+                        actif
+                    FROM referentiel_solution_interne
+                    ORDER BY LOWER(type_solution), LOWER(nom_solution), id_solution
+                    """
+                )
+                return cur.fetchall()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def create_internal_solution(payload: Dict[str, Any]):
+        CatalogRepository.ensure_internal_solutions_schema()
+        conn = get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO referentiel_solution_interne (
+                            nom_solution,
+                            type_solution,
+                            editeur_solution,
+                            usage_securite,
+                            description_solution,
+                            actif
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING
+                            id_solution,
+                            nom_solution,
+                            type_solution,
+                            editeur_solution,
+                            usage_securite,
+                            description_solution,
+                            actif
+                        """,
+                        (
+                            payload["nom_solution"].strip(),
+                            payload["type_solution"].strip(),
+                            payload.get("editeur_solution"),
+                            payload.get("usage_securite"),
+                            payload.get("description_solution"),
+                            payload.get("actif", True),
+                        ),
+                    )
+                    return cur.fetchone()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_internal_solution(solution_id: int, payload: Dict[str, Any]):
+        CatalogRepository.ensure_internal_solutions_schema()
+        conn = get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE referentiel_solution_interne
+                        SET nom_solution = %s,
+                            type_solution = %s,
+                            editeur_solution = %s,
+                            usage_securite = %s,
+                            description_solution = %s,
+                            actif = %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id_solution = %s
+                        RETURNING
+                            id_solution,
+                            nom_solution,
+                            type_solution,
+                            editeur_solution,
+                            usage_securite,
+                            description_solution,
+                            actif
+                        """,
+                        (
+                            payload["nom_solution"].strip(),
+                            payload["type_solution"].strip(),
+                            payload.get("editeur_solution"),
+                            payload.get("usage_securite"),
+                            payload.get("description_solution"),
+                            payload.get("actif", True),
+                            solution_id,
+                        ),
+                    )
+                    return cur.fetchone()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def delete_internal_solution(solution_id: int):
+        CatalogRepository.ensure_internal_solutions_schema()
+        conn = get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM referentiel_solution_interne WHERE id_solution = %s",
+                        (solution_id,),
+                    )
+                    return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    @staticmethod
     def list_references():
         conn = get_connection()
         try:

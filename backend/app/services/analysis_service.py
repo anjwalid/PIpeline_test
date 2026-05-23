@@ -7,7 +7,9 @@ from app.core.exceptions import AnalysisStepError
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.questionnaire_repository import QuestionnaireRepository
+from app.services.audit_service import AuditService
 from app.services.dfd_generator import generate_dfd_with_pytm
+from app.services.llm_feedback_service import LlmFeedbackService
 from app.services.llm_clients import (
     call_gemini,
     call_mistral,
@@ -18,7 +20,8 @@ from app.services.llm_clients import (
 from app.services.prompts import (
     APPLICATION_DESCRIPTION_PROMPT,
     DFD_SYSTEM_PROMPT,
-    THREAT_MODELING_PROMPT,
+    THREAT_MITIGATION_PROMPT,
+    THREAT_SELECTION_PROMPT,
 )
 from app.services.report_management_service import ReportManagementService
 from app.services.report_service import build_safe_slug, generate_report_pdf
@@ -144,34 +147,132 @@ class AnalysisService:
 
     @staticmethod
     def _generate_application_description(app_name: str, app_description: str, context_bundle: dict) -> str:
+        feedback_memory = LlmFeedbackService.build_prompt_memory(
+            section_types=["application_description"],
+        )
         prompt = (
             f"{APPLICATION_DESCRIPTION_PROMPT}\n\n"
             f"Nom de l application :\n{app_name}\n\n"
             f"Description initiale fournie :\n{app_description}\n\n"
-            f"{context_bundle['context_text']}\n"
+            f"{context_bundle['context_text']}\n\n"
+            f"{feedback_memory}\n"
         )
         return clean_text_response(call_mistral(prompt))
 
     @staticmethod
     def _generate_dfd_json(app_name: str, generated_description: str, context_bundle: dict) -> dict:
+        feedback_memory = LlmFeedbackService.build_prompt_memory(
+            section_types=["dfd"],
+        )
         prompt = (
             f"{DFD_SYSTEM_PROMPT}\n\n"
             f"Nom de l application :\n{app_name}\n\n"
             f"Description consolidee :\n{generated_description}\n\n"
-            f"{context_bundle['context_text']}\n"
+            f"{context_bundle['context_text']}\n\n"
+            f"{feedback_memory}\n"
         )
         return extract_json_object(call_mistral(prompt))
 
     @staticmethod
-    def _analyze_catalog_threats(app_name: str, generated_description: str, context_bundle: dict) -> dict:
-        catalog_threats = CatalogRepository.list_threats_for_analysis()
+    def _build_catalog_selection_payload(catalog_threats: list[dict]) -> list[dict]:
+        lightweight_catalog: list[dict] = []
+        for threat in catalog_threats:
+            name = str(threat.get("nom_menace") or threat.get("name") or "").strip()
+            if not name:
+                continue
+
+            lightweight_catalog.append(
+                {
+                    "name": name,
+                    "description": str(threat.get("description") or "").strip(),
+                }
+            )
+        return lightweight_catalog
+
+    @staticmethod
+    def _build_mitigation_payload(
+        selected_threats: list[dict],
+        catalog_threats: list[dict],
+    ) -> list[dict]:
+        catalog_by_name = {
+            str(threat.get("nom_menace") or threat.get("name") or "").strip().casefold(): threat
+            for threat in catalog_threats
+            if str(threat.get("nom_menace") or threat.get("name") or "").strip()
+        }
+
+        payload: list[dict] = []
+        for selected_threat in selected_threats:
+            threat_name = str(selected_threat.get("name") or "").strip()
+            if not threat_name:
+                continue
+
+            catalog_match = catalog_by_name.get(threat_name.casefold(), {})
+            db_mitigations = []
+            for mitigation in catalog_match.get("mitigations", []) or []:
+                mitigation_text = str(mitigation.get("description_mitigation") or "").strip()
+                if mitigation_text:
+                    db_mitigations.append(mitigation_text)
+
+            payload.append(
+                {
+                    "name": threat_name,
+                    "description": str(
+                        selected_threat.get("description")
+                        or catalog_match.get("description")
+                        or ""
+                    ).strip(),
+                    "attack_scenarios": selected_threat.get("attack_scenarios") or [],
+                    "existing_mitigations": db_mitigations,
+                }
+            )
+
+        return payload
+
+    @staticmethod
+    def _select_catalog_threats(
+        app_name: str,
+        generated_description: str,
+        context_bundle: dict,
+        lightweight_catalog: list[dict],
+    ) -> dict:
+        feedback_memory = LlmFeedbackService.build_prompt_memory(
+            section_types=["threat", "attack_scenario"],
+        )
         prompt = (
-            f"{THREAT_MODELING_PROMPT}\n\n"
+            f"{THREAT_SELECTION_PROMPT}\n\n"
             f"Nom de l application :\n{app_name}\n\n"
             f"Description consolidee :\n{generated_description}\n\n"
             f"{context_bundle['context_text']}\n\n"
+            f"{feedback_memory}\n\n"
             f"Catalogue de menaces disponible :\n"
-            f"{json.dumps(catalog_threats, ensure_ascii=False, indent=2)}\n"
+            f"{json.dumps(lightweight_catalog, ensure_ascii=False, indent=2)}\n"
+        )
+        return extract_json_object(call_gemini(prompt))
+
+    @staticmethod
+    def _enrich_threat_mitigations(
+        app_name: str,
+        generated_description: str,
+        context_bundle: dict,
+        selected_threats_payload: list[dict],
+    ) -> dict:
+        threat_names = [
+            str(item.get("name") or "").strip()
+            for item in selected_threats_payload
+            if str(item.get("name") or "").strip()
+        ]
+        feedback_memory = LlmFeedbackService.build_prompt_memory(
+            section_types=["threat", "attack_scenario", "mitigation"],
+            threat_names=threat_names,
+        )
+        prompt = (
+            f"{THREAT_MITIGATION_PROMPT}\n\n"
+            f"Nom de l application :\n{app_name}\n\n"
+            f"Description consolidee :\n{generated_description}\n\n"
+            f"{context_bundle['context_text']}\n\n"
+            f"{feedback_memory}\n\n"
+            f"Menaces retenues et mitigations existantes :\n"
+            f"{json.dumps(selected_threats_payload, ensure_ascii=False, indent=2)}\n"
         )
         return extract_json_object(call_gemini(prompt))
 
@@ -196,7 +297,6 @@ class AnalysisService:
                 {
                     "name": name,
                     "description": str(raw_threat.get("description", "")).strip(),
-                    "impact": str(raw_threat.get("impact", "")).strip(),
                     "attack_scenarios": [
                         str(item).strip()
                         for item in attack_scenarios
@@ -259,6 +359,21 @@ class AnalysisService:
                 questionnaire_id=questionnaire_meta["id"],
                 questionnaire_version=questionnaire_meta["version"],
             )
+            AuditService.log_action(
+                actor=generated_by,
+                action_type="CREATE_ANALYSIS",
+                entity_type="analysis",
+                entity_id=str(analysis_id),
+                entity_label=app_name,
+                new_values={
+                    "app_name": app_name,
+                    "app_description": app_description,
+                    "questionnaire_code": questionnaire_code,
+                    "questionnaire_id": questionnaire_meta["id"],
+                    "questionnaire_version": questionnaire_meta["version"],
+                },
+                metadata={"dev_name": dev_name},
+            )
         except Exception as exc:
             logger.exception("Echec creation analysis_request")
             raise AnalysisStepError(
@@ -281,6 +396,15 @@ class AnalysisService:
 
             try:
                 AnalysisRepository.update_analysis_status(analysis_id, "processing")
+                AuditService.log_action(
+                    actor=generated_by,
+                    action_type="UPDATE_ANALYSIS_STATUS",
+                    entity_type="analysis",
+                    entity_id=str(analysis_id),
+                    entity_label=app_name,
+                    old_values={"status": "submitted"},
+                    new_values={"status": "processing"},
+                )
             except Exception as exc:
                 logger.exception("Echec maj statut analyse -> processing")
                 raise AnalysisStepError(
@@ -363,10 +487,28 @@ class AnalysisService:
                 ) from exc
 
             try:
-                gemini_result = AnalysisService._analyze_catalog_threats(
+                catalog_threats = CatalogRepository.list_threats_for_analysis()
+                lightweight_catalog = AnalysisService._build_catalog_selection_payload(
+                    catalog_threats
+                )
+                selected_threats_result = AnalysisService._select_catalog_threats(
                     app_name=app_name,
                     generated_description=generated_description,
                     context_bundle=context_bundle,
+                    lightweight_catalog=lightweight_catalog,
+                )
+                selected_threats = AnalysisService._normalize_selected_threats(
+                    selected_threats_result
+                )
+                mitigation_payload = AnalysisService._build_mitigation_payload(
+                    selected_threats=selected_threats,
+                    catalog_threats=catalog_threats,
+                )
+                mitigated_result = AnalysisService._enrich_threat_mitigations(
+                    app_name=app_name,
+                    generated_description=generated_description,
+                    context_bundle=context_bundle,
+                    selected_threats_payload=mitigation_payload,
                 )
                 # Exemple d activation LLM-as-a-Judge sur la sortie threat modeling.
                 # judge_threats = validate_model_output_with_judge(
@@ -388,7 +530,7 @@ class AnalysisService:
                 #     judge_threats["score"],
                 #     judge_threats["decision"],
                 # )
-                selected_threats = AnalysisService._normalize_selected_threats(gemini_result)
+                selected_threats = AnalysisService._normalize_selected_threats(mitigated_result)
                 logger.info(
                     "Analyse menaces terminee: analysis_id=%s threat_count=%s",
                     analysis_id,
@@ -457,6 +599,15 @@ class AnalysisService:
 
             try:
                 AnalysisRepository.update_analysis_status(analysis_id, "completed")
+                AuditService.log_action(
+                    actor=generated_by,
+                    action_type="UPDATE_ANALYSIS_STATUS",
+                    entity_type="analysis",
+                    entity_id=str(analysis_id),
+                    entity_label=app_name,
+                    old_values={"status": "processing"},
+                    new_values={"status": "completed"},
+                )
             except Exception as exc:
                 logger.exception("Echec maj statut analyse -> completed")
                 raise AnalysisStepError(
@@ -476,7 +627,24 @@ class AnalysisService:
             }
         except Exception as exc:
             try:
+                failed_step = exc.step if isinstance(exc, AnalysisStepError) else "unknown"
+                failed_message = (
+                    exc.message
+                    if isinstance(exc, AnalysisStepError)
+                    else "Une erreur inattendue est survenue pendant le pipeline d'analyse."
+                )
                 AnalysisRepository.update_analysis_status(analysis_id, "failed")
+                AuditService.log_action(
+                    actor=generated_by,
+                    action_type="UPDATE_ANALYSIS_STATUS",
+                    entity_type="analysis",
+                    entity_id=str(analysis_id),
+                    entity_label=app_name,
+                    old_values={"status": "processing"},
+                    new_values={"status": "failed"},
+                    metadata={"error_step": failed_step},
+                    comment=failed_message,
+                )
             except Exception:
                 logger.exception("Echec maj statut analyse -> failed")
             logger.exception("Pipeline analyse en echec: analysis_id=%s", analysis_id)

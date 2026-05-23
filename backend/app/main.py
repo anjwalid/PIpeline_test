@@ -5,10 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.admin_catalog import router as admin_catalog_router
+from app.api.admin_audit import router as admin_audit_router
 from app.api.admin_questionnaire import router as admin_questionnaire_router
 from app.api.analysis import router as analysis_router
+from app.api.llm_feedback import router as llm_feedback_router
 from app.api.questionnaire import router as questionnaire_router
 from app.api.reports import router as reports_router
+from app.api.secops_chat import router as secops_chat_router
+from app.repositories.questionnaire_repository import QuestionnaireRepository
+from app.services.audit_service import AuditService
 from app.services.report_management_service import ReportManagementService
 
 logging.basicConfig(
@@ -24,6 +29,8 @@ app = FastAPI(title="AWB Backend", version="1.0.0")
 @app.on_event("startup")
 def startup_prepare_schema():
     ReportManagementService.ensure_schema()
+    QuestionnaireRepository.ensure_schema()
+    AuditService.ensure_schema()
 
 
 app.add_middleware(
@@ -65,8 +72,11 @@ def health_check():
 app.include_router(questionnaire_router)
 app.include_router(admin_questionnaire_router)
 app.include_router(admin_catalog_router)
+app.include_router(admin_audit_router)
 app.include_router(analysis_router)
 app.include_router(reports_router)
+app.include_router(llm_feedback_router)
+app.include_router(secops_chat_router)
 
 
 @app.get("/")

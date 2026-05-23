@@ -1,9 +1,26 @@
 from typing import Any, Dict
 
 from app.repositories.catalog_repository import CatalogRepository
+from app.services.catalog_export_service import CatalogExportService
 
 
 class CatalogService:
+    @staticmethod
+    def list_internal_solutions():
+        return CatalogRepository.list_internal_solutions()
+
+    @staticmethod
+    def create_internal_solution(payload: Dict[str, Any]):
+        return CatalogRepository.create_internal_solution(payload)
+
+    @staticmethod
+    def update_internal_solution(solution_id: int, payload: Dict[str, Any]):
+        return CatalogRepository.update_internal_solution(solution_id, payload)
+
+    @staticmethod
+    def delete_internal_solution(solution_id: int):
+        return CatalogRepository.delete_internal_solution(solution_id)
+
     @staticmethod
     def list_references():
         return CatalogRepository.list_references()
@@ -49,4 +66,11 @@ class CatalogService:
         return {
             "status": "pending",
             "message": "Le processus de mise a jour automatique du catalogue sera branche dans une prochaine iteration.",
+        }
+
+    @staticmethod
+    def export_threat_catalog():
+        return {
+            "filename": CatalogExportService.build_filename(),
+            "content": CatalogExportService.build_workbook_bytes(),
         }

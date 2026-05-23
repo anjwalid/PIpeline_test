@@ -23,20 +23,20 @@ def list_my_reports(current_user: Annotated[AuthenticatedUser, Depends(get_curre
 
 
 @router.get("", response_model=list[ReportResponse])
-def list_all_reports(_: Annotated[AuthenticatedUser, Depends(get_current_user)]):
-    return ReportManagementService.list_all_reports()
+def list_all_reports(current_user: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+    return ReportManagementService.list_all_reports(current_user)
 
 
 @router.get("/dashboard/manager", response_model=ManagerDashboardMetricsResponse)
 def get_manager_dashboard_metrics(
-    _: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ):
-    return ReportManagementService.get_manager_dashboard_metrics()
+    return ReportManagementService.get_manager_dashboard_metrics(current_user)
 
 
 @router.get("/{report_id}", response_model=ReportResponse)
-def get_report(report_id: str, _: Annotated[AuthenticatedUser, Depends(get_current_user)]):
-    return ReportManagementService.get_report(report_id)
+def get_report(report_id: str, current_user: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+    return ReportManagementService.get_report(report_id, current_user)
 
 
 @router.patch("/{report_id}/status", response_model=ReportResponse)
@@ -50,15 +50,16 @@ def update_report_status(
         new_status=payload.status,
         actor=current_user,
         comment=payload.comment,
+        feedback_items=payload.feedback_items,
     )
 
 
 @router.get("/{report_id}/results", response_model=ReportResultsResponse)
 def get_report_results(
     report_id: str,
-    _: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ):
-    return ReportManagementService.get_report_results(report_id)
+    return ReportManagementService.get_report_results(report_id, current_user)
 
 
 @router.put("/{report_id}/results", response_model=ReportResultsResponse)
@@ -76,6 +77,8 @@ def update_report_results(
         dfd_image_path=payload.dfd_image_path,
         dfd_reference=payload.dfd_reference,
         actor=current_user,
+        modification_reasons=payload.modification_reasons,
+        modification_comment=payload.modification_comment,
     )
 
 
@@ -90,19 +93,23 @@ def regenerate_report(
 @router.post("/{report_id}/dfd-upload", response_model=ReportDfdUploadResponse)
 def upload_report_dfd(
     report_id: str,
-    _: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     dfd_file: UploadFile = File(...),
 ):
     return ReportManagementService.save_uploaded_dfd(
         report_id=report_id,
         original_file_name=dfd_file.filename or "dfd-upload.png",
         file_stream=dfd_file.file,
+        actor=current_user,
     )
 
 
 @router.get("/{report_id}/download", include_in_schema=False)
-def download_report(report_id: str):
-    payload = ReportManagementService.get_download_payload(report_id)
+def download_report(
+    report_id: str,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    payload = ReportManagementService.get_download_payload(report_id, current_user)
     report = payload["report"]
     local_path = payload.get("local_path")
     object_response = payload["object_response"]

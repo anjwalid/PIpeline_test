@@ -21,6 +21,30 @@ class ReportStatusHistoryResponse(BaseModel):
     changed_at: datetime
 
 
+class ManagerReviewFeedbackItem(BaseModel):
+    decision_type: str
+    reason_code: str
+    severity: str | None = None
+    section_type: str = "GLOBAL"
+    section_identifier: str | None = None
+    comment: str | None = None
+
+
+class ManagerReviewFeedbackResponse(ManagerReviewFeedbackItem):
+    id: int
+    created_by: str | None = None
+    created_by_username: str | None = None
+    created_by_email: str | None = None
+    created_at: datetime
+
+
+class SecOpsModificationReason(BaseModel):
+    reason_code: str
+    section_type: str = "GLOBAL"
+    section_identifier: str | None = None
+    comment: str | None = None
+
+
 class ReportResponse(BaseModel):
     id: str
     title: str
@@ -42,11 +66,13 @@ class ReportResponse(BaseModel):
     validated_at: datetime | None = None
     annotations: list[ReportAnnotationResponse] = Field(default_factory=list)
     status_history: list[ReportStatusHistoryResponse] = Field(default_factory=list)
+    manager_feedback: list[ManagerReviewFeedbackResponse] = Field(default_factory=list)
 
 
 class ReportStatusUpdateRequest(BaseModel):
     status: str
     comment: str | None = None
+    feedback_items: list[ManagerReviewFeedbackItem] = Field(default_factory=list)
 
 
 class EditableThreat(BaseModel):
@@ -75,6 +101,8 @@ class ReportResultsUpdateRequest(BaseModel):
     selected_threats: list[EditableThreat]
     dfd_image_path: str | None = None
     dfd_reference: str | None = None
+    modification_reasons: list[SecOpsModificationReason] = Field(default_factory=list)
+    modification_comment: str | None = None
 
 
 class ReportDfdUploadResponse(BaseModel):

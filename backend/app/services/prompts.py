@@ -58,8 +58,8 @@ Contraintes :
 """
 
 
-THREAT_MODELING_PROMPT = """
-Tu es un expert senior en threat modeling applicatif et en architectures AI.
+THREAT_SELECTION_PROMPT = """
+Tu es un expert senior en threat modeling applicatif et architectural.
 
 Mission :
 Analyser l architecture de l application a partir :
@@ -67,23 +67,74 @@ Analyser l architecture de l application a partir :
 - de la description consolidee de l application
 - du contexte extrait du questionnaire
 - des indications techniques de diagramme
-- du catalogue complet de menaces stocke en base de donnees
+- du catalogue de menaces stocke en base de donnees, limite au nom et a la description de chaque menace
 
 Tu dois :
 - raisonner sur le contexte reel de l application
 - selectionner uniquement les menaces du catalogue qui sont pertinentes
-- reutiliser la description, les scenarios d attaque et les mitigations du catalogue lorsqu ils sont applicables
-- contextualiser l impact de chaque menace pour cette application
-- filtrer les scenarios et mitigations pour ne garder que les plus pertinents
+- reutiliser et adapter la description de la menace au contexte applicatif
+- generer entre 2 et 3 scenarios d attaque par menace retenue
+- ne retenir que les menaces justifiees par le contexte applicatif
 
 Regles strictes :
 - repondre uniquement en JSON
 - aucun texte hors JSON
 - ne jamais inventer une menace absente du catalogue
 - ne pas renvoyer tout le catalogue, seulement les menaces pertinentes
-- chaque menace doit contenir un nom, une description contextualisee, un impact, des scenarios d attaque et des mitigations
-- les scenarios d attaque et mitigations doivent etre des listes de phrases claires en francais
-- si une mitigation du catalogue n est pas adaptee au contexte, ne pas la garder
+- chaque menace doit contenir un nom, une description contextualisee et une liste attack_scenarios
+- attack_scenarios doit contenir entre 2 et 3 phrases claires en francais
+- ne pas inclure de mitigations a cette etape
+- ne pas ajouter de champ impact
+
+Structure obligatoire :
+{
+  "threats": [
+    {
+      "name": "",
+      "description": "",
+      "attack_scenarios": [""]
+    }
+  ]
+}
+"""
+
+
+THREAT_MITIGATION_PROMPT = """
+Tu es un expert senior en threat modeling applicatif et architectural.
+
+Mission :
+Analyser l architecture de l application a partir :
+- du nom de l application
+- de la description consolidee de l application
+- du contexte extrait du questionnaire
+- des indications techniques de diagramme
+- d une liste de menaces deja retenues avec leurs scenarios d attaque
+- des mitigations existantes en base de donnees pour ces menaces
+
+Tu dois :
+- conserver strictement les menaces deja retenues
+- conserver la coherence entre chaque menace et ses scenarios d attaque
+- adapter les mitigations existantes au contexte reel de l application
+- selectionner uniquement les mitigations vraiment necessaires parmi celles du catalogue, meme si le catalogue en contient beaucoup pour une meme menace
+- retenir le maximum necessaire mais jamais des mitigations redondantes, equivalentes ou reformulees plusieurs fois
+- completer avec des mitigations supplementaires seulement si une mitigation importante manque dans le catalogue pour couvrir correctement le contexte
+- ne proposer que des mitigations concretes, exploitables, fortes et pertinentes pour un contexte critique
+- prioriser les mitigations les plus exigeantes et les plus critiques lorsque le contexte applicatif est critique
+
+Regles strictes :
+- repondre uniquement en JSON
+- aucun texte hors JSON
+- ne jamais ajouter une nouvelle menace
+- chaque menace doit contenir un nom, une description, une liste attack_scenarios et une liste mitigations
+- les champs name et attack_scenarios doivent rester coherents avec les menaces deja retenues
+- les mitigations doivent etre des listes de phrases claires en francais
+- si une mitigation existante n est pas adaptee au contexte, ne pas la garder
+- ne jamais repeter une mitigation dans une meme menace, meme avec une formulation differente
+- fusionner les mitigations proches au lieu de les dupliquer
+- supprimer toute mitigation generique, faible, hors sujet ou deja couverte par une autre mitigation plus forte
+- chaque mitigation doit etre justifiee par le contexte, l architecture, les flux, les donnees ou les dependances de l application
+- pour un contexte critique, viser une sortie dense et utile avec seulement les mitigations les plus exigeantes et prioritaires
+- limiter le nombre total de menaces retenues au strict necessaire ; pour un contexte critique, ne jamais depasser 40 a 50 menaces et seulement si elles sont reellement justifiees
 
 Structure obligatoire :
 {

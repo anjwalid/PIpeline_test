@@ -28,6 +28,41 @@ class ReportRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1
+                            FROM information_schema.tables
+                            WHERE table_schema = 'public'
+                              AND table_name = 'reports'
+                        ) THEN
+                            ALTER TABLE reports
+                            DROP CONSTRAINT IF EXISTS reports_status_check;
+
+                            UPDATE reports
+                            SET status = CASE UPPER(COALESCE(status, ''))
+                                WHEN 'PENDING_MANAGER_VALIDATION' THEN 'PENDING'
+                                WHEN 'GENERATED' THEN 'DRAFT'
+                                WHEN 'IN_PROGRESS' THEN 'REJECTED'
+                                WHEN 'NEEDS_CHANGES' THEN 'REJECTED'
+                                ELSE status
+                            END
+                            WHERE UPPER(COALESCE(status, '')) IN (
+                                'PENDING_MANAGER_VALIDATION',
+                                'GENERATED',
+                                'IN_PROGRESS',
+                                'NEEDS_CHANGES'
+                            );
+
+                            ALTER TABLE reports
+                            ADD CONSTRAINT reports_status_check
+                            CHECK (status IN ('DRAFT', 'PENDING', 'APPROVED', 'REJECTED'));
+                        END IF;
+                    END $$;
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS report_results (
                         report_id UUID PRIMARY KEY
                             REFERENCES reports(id)
@@ -98,7 +133,7 @@ class ReportRepository:
         minio_bucket: str,
         minio_object_key: str,
         generated_by: AuthenticatedUser,
-        status: str = "PENDING_MANAGER_VALIDATION",
+        status: str = "DRAFT",
     ) -> dict:
         conn = get_connection()
         try:
@@ -146,7 +181,7 @@ class ReportRepository:
                         str(generated_by.user_id),
                         generated_by.display_name,
                         generated_by.email,
-                        "Rapport genere et soumis au manager.",
+                        "Rapport genere en brouillon SecOps.",
                     ),
                 )
                 conn.commit()
@@ -406,10 +441,6 @@ class ReportRepository:
                         minio_object_key = %s,
                         status = %s,
                         generated_at = CURRENT_TIMESTAMP,
-                        validated_by = NULL,
-                        validated_by_username = NULL,
-                        validated_by_email = NULL,
-                        validated_at = NULL,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
                     RETURNING *
@@ -427,18 +458,19 @@ class ReportRepository:
                 )
                 updated = cur.fetchone()
 
-                cur.execute(
-                    REPORT_STATUS_HISTORY_INSERT_SQL,
-                    (
-                        report_id,
-                        old_status,
-                        new_status,
-                        str(actor.user_id),
-                        actor.display_name,
-                        actor.email,
-                        comment,
-                    ),
-                )
+                if old_status != new_status:
+                    cur.execute(
+                        REPORT_STATUS_HISTORY_INSERT_SQL,
+                        (
+                            report_id,
+                            old_status,
+                            new_status,
+                            str(actor.user_id),
+                            actor.display_name,
+                            actor.email,
+                            comment,
+                        ),
+                    )
 
                 conn.commit()
                 return updated
@@ -604,6 +636,7 @@ class ReportRepository:
 
                 old_status = current["status"]
 
+                should_clear_validation = new_status == "PENDING"
                 cur.execute(
                     """
                     UPDATE reports
@@ -611,16 +644,17 @@ class ReportRepository:
                         validated_by = %s,
                         validated_by_username = %s,
                         validated_by_email = %s,
-                        validated_at = CURRENT_TIMESTAMP,
+                        validated_at = CASE WHEN %s THEN NULL ELSE CURRENT_TIMESTAMP END,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
                     RETURNING *
                     """,
                     (
                         new_status,
-                        str(actor.user_id),
-                        actor.display_name,
-                        actor.email,
+                        None if should_clear_validation else str(actor.user_id),
+                        None if should_clear_validation else actor.display_name,
+                        None if should_clear_validation else actor.email,
+                        should_clear_validation,
                         report_id,
                     ),
                 )
