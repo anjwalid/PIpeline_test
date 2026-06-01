@@ -1,3 +1,6 @@
+from app.core.config import settings
+
+
 class AnalysisStepError(Exception):
     def __init__(self, step: str, message: str, *, cause: Exception | None = None):
         super().__init__(message)
@@ -10,5 +13,9 @@ class AnalysisStepError(Exception):
             "error_type": "ANALYSIS_STEP_ERROR",
             "step": self.step,
             "message": self.message,
-            "cause": str(self.cause) if self.cause else None,
+            "cause": (
+                str(self.cause)
+                if self.cause and settings.DEBUG_INCLUDE_ERROR_CAUSE
+                else None
+            ),
         }

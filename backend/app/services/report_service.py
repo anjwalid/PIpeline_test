@@ -140,6 +140,155 @@ def _build_requirements_from_threats(selected_threats: list[dict]) -> list[dict]
     return fallback_requirements
 
 
+def _normalize_reference_entries(selected_threats: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for threat in selected_threats:
+        references = threat.get("references") or []
+        if not isinstance(references, list):
+            references = []
+
+        for reference in references:
+            if not isinstance(reference, dict):
+                continue
+
+            reference_name = str(reference.get("nom_reference") or "").strip()
+            reference_code = str(reference.get("reference_menace") or "").strip()
+            reference_link = str(reference.get("lien") or "").strip()
+
+            if not any((reference_name, reference_code, reference_link)):
+                continue
+
+            dedupe_key = (
+                reference_name.casefold(),
+                reference_code.casefold(),
+                reference_link.casefold(),
+            )
+            if dedupe_key in seen:
+                continue
+
+            seen.add(dedupe_key)
+            normalized.append(
+                {
+                    "name": reference_name,
+                    "code": reference_code,
+                    "link": reference_link,
+                }
+            )
+
+    return normalized
+
+
+def _extract_cve_reference_entries(selected_threats: list[dict]) -> list[dict]:
+    references = _normalize_reference_entries(selected_threats)
+    cve_entries: list[dict] = []
+    seen_codes: set[str] = set()
+
+    for reference in references:
+        code = str(reference.get("code") or "").strip()
+        if not code or not code.upper().startswith("CVE-"):
+            continue
+        normalized_code = code.upper()
+        if normalized_code in seen_codes:
+            continue
+        seen_codes.add(normalized_code)
+        cve_entries.append(
+            {
+                "code": normalized_code,
+                "name": str(reference.get("name") or "").strip() or "Reference CVE",
+                "link": str(reference.get("link") or "").strip(),
+            }
+        )
+
+    return cve_entries
+
+
+def _build_cve_exposure_summary(selected_threats: list[dict]) -> tuple[str, list[dict]]:
+    cve_entries = _extract_cve_reference_entries(selected_threats)
+    if not cve_entries:
+        return (
+            "Aucune reference CVE explicite n a ete conservee dans les menaces du rapport. "
+            "Le contexte d exposition est donc deduit uniquement de l architecture et des scenarios retenus.",
+            [],
+        )
+
+    threat_count_with_cve = 0
+    for threat in selected_threats:
+        references = threat.get("references") or []
+        if any(
+            isinstance(reference, dict)
+            and str(reference.get("reference_menace") or "").strip().upper().startswith("CVE-")
+            for reference in references
+        ):
+            threat_count_with_cve += 1
+
+    summary = (
+        f"{len(cve_entries)} reference(s) CVE distincte(s) ont ete retrouvees sur "
+        f"{threat_count_with_cve} menace(s) du rapport. "
+        "Ces references servent d'ancrage technique pour qualifier l'exposition reelle des composants et rendre "
+        "les scenarios d'attaque plus credibles."
+    )
+
+    return summary, cve_entries[:8]
+
+
+def _join_with_fr_conjunction(values: list[str]) -> str:
+    entries = [value for value in values if value]
+    if not entries:
+        return ""
+    if len(entries) == 1:
+        return entries[0]
+    if len(entries) == 2:
+        return f"{entries[0]} et {entries[1]}"
+    return f"{', '.join(entries[:-1])} et {entries[-1]}"
+
+
+def _build_reference_label(reference: dict) -> str:
+    name = str(reference.get("name") or "").strip()
+    code = str(reference.get("code") or "").strip()
+
+    if name and code:
+        return f"{name} ({code})"
+    return name or code
+
+
+def _build_threat_modeling_methodology_text(selected_threats: list[dict]) -> str:
+    references = _normalize_reference_entries(selected_threats)
+    labels = [_build_reference_label(reference) for reference in references]
+
+    if labels:
+        return (
+            "La modelisation des menaces a ete realisee en se basant sur l architecture technique "
+            "de l environnement cible et sur les referentiels effectivement rattaches aux menaces "
+            f"retenues, notamment {_join_with_fr_conjunction(labels)}."
+        )
+
+    return (
+        "La modelisation des menaces a ete realisee en se basant sur l architecture technique "
+        "de l environnement cible et sur les menaces du catalogue interne retenues pour cette analyse."
+    )
+
+
+def _build_threat_identification_text(selected_threats: list[dict]) -> str:
+    references = _normalize_reference_entries(selected_threats)
+    labels = [_build_reference_label(reference) for reference in references]
+    threat_count = len(selected_threats)
+
+    if labels:
+        return (
+            "L identification des menaces a ete alimentee par les referentiels reellement associes "
+            f"aux menaces retenues dans le projet, a savoir {_join_with_fr_conjunction(labels)}. "
+            f"Au total, {threat_count} menace(s) ont ete consolidees dans le rapport sur cette base."
+        )
+
+    return (
+        "L identification des menaces a ete alimentee par les menaces effectivement retenues dans "
+        "le catalogue du projet. Aucun referentiel externe explicite n etant rattache aux menaces "
+        f"selectionnees, le rapport consolide {threat_count} menace(s) sur la base du catalogue interne."
+    )
+
+
 def build_safe_slug(value: str) -> str:
     cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in (value or "").strip())
     compact = "-".join(part for part in cleaned.split("-") if part)
@@ -217,6 +366,7 @@ def generate_report_pdf(
     requirements = _build_requirements(mitigations)
     if not requirements:
         requirements = _build_requirements_from_threats(selected_threats)
+    cve_exposure_summary, cve_reference_rows = _build_cve_exposure_summary(selected_threats)
     report_data = {
         "company_name": "Attijariwafa Bank",
         "document_title": "DOCUMENT DE SECURITE TECHNIQUE",
@@ -236,6 +386,12 @@ def generate_report_pdf(
         "dfd_reference": dfd_reference or "DFD-01",
         "threats_table": threats_table,
         "threats": template_threats,
+        "threat_modeling_methodology_text": _build_threat_modeling_methodology_text(
+            selected_threats
+        ),
+        "threat_identification_text": _build_threat_identification_text(selected_threats),
+        "cve_exposure_summary": cve_exposure_summary,
+        "cve_reference_rows": cve_reference_rows,
         "attack_scenarios": attack_scenarios,
         "mitigations": mitigations,
         "requirements": requirements,

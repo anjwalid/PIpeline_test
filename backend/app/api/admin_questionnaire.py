@@ -2,7 +2,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.auth import AuthenticatedUser, get_admin_user
+from app.core.config import settings
+from app.core.rate_limit import build_rate_limit_dependency
 from app.schemas.questionnaire import (
     QuestionnaireListItemResponse,
     QuestionnaireResponse,
@@ -11,12 +13,22 @@ from app.schemas.questionnaire import (
 from app.services.audit_service import AuditService
 from app.services.questionnaire_service import QuestionnaireService
 
-router = APIRouter(prefix="/admin/questionnaires", tags=["admin-questionnaires"])
+admin_rate_limit = build_rate_limit_dependency(
+    prefix="admin-questionnaires",
+    limit=settings.ADMIN_RATE_LIMIT_COUNT,
+    window_seconds=settings.ADMIN_RATE_LIMIT_WINDOW_SECONDS,
+)
+
+router = APIRouter(
+    prefix="/admin/questionnaires",
+    tags=["admin-questionnaires"],
+    dependencies=[Depends(admin_rate_limit)],
+)
 QUESTIONNAIRE_NOT_FOUND = "Questionnaire non trouvé"
 
 
 @router.get("", response_model=list[QuestionnaireListItemResponse])
-def list_questionnaires(_: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+def list_questionnaires(_: Annotated[AuthenticatedUser, Depends(get_admin_user)]):
     return QuestionnaireService.list_questionnaires()
 
 
@@ -27,7 +39,7 @@ def list_questionnaires(_: Annotated[AuthenticatedUser, Depends(get_current_user
 )
 def get_questionnaire(
     questionnaire_id: int,
-    _: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    _: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     questionnaire = QuestionnaireService.get_questionnaire_by_id(questionnaire_id)
     if not questionnaire:
@@ -38,7 +50,7 @@ def get_questionnaire(
 @router.post("", response_model=QuestionnaireResponse)
 def create_questionnaire(
     payload: QuestionnaireUpsertRequest,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     questionnaire = QuestionnaireService.create_questionnaire(payload.dict())
     AuditService.log_action(
@@ -66,7 +78,7 @@ def create_questionnaire(
 def update_questionnaire(
     questionnaire_id: int,
     payload: QuestionnaireUpsertRequest,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     previous = QuestionnaireService.get_questionnaire_by_id(questionnaire_id)
     questionnaire = QuestionnaireService.update_questionnaire(questionnaire_id, payload.dict())
@@ -90,7 +102,7 @@ def update_questionnaire(
 )
 def delete_questionnaire(
     questionnaire_id: int,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     previous = QuestionnaireService.get_questionnaire_by_id(questionnaire_id)
     deleted = QuestionnaireService.delete_questionnaire(questionnaire_id)

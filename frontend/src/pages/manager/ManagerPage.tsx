@@ -8,6 +8,7 @@ import {
   Filter,
   History,
   LayoutDashboard,
+  RefreshCw,
   ShieldAlert,
   ShieldCheck,
   TimerReset,
@@ -15,19 +16,23 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { Navbar } from '../../components/Navbar';
+import { Navbar, type NavbarBackAction } from '../../components/Navbar';
+import { pushBrowserPath } from '../../utils/navigation';
 import {
   fetchAllReports,
   fetchManagerDashboardMetrics,
   fetchReportBlobUrl,
+  fetchReportResults,
   toAbsoluteReportUrl,
   updateReportStatus,
 } from '../../api/reports';
 import { HistoryView } from '../../components/HistoryView';
+import { ReportVersionHistory } from '../../components/ReportVersionHistory';
 import { showErrorAlert, showSuccessAlert } from '../../utils/alerts';
 import type {
   ManagerDashboardMetrics,
   ReportRecord,
+  ReportResultsRecord,
   ReportStatus,
 } from '../../types';
 
@@ -94,12 +99,33 @@ function decisionTitle(action: DecisionAction): string {
   return 'Confirmer la decision';
 }
 
+function parseManagerPath(pathname: string): ManagerSection {
+  const segments = pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  if (segments[0] !== 'manager') {
+    return 'dashboard';
+  }
+
+  if (segments[1] === 'validation' || segments[1] === 'history') {
+    return segments[1];
+  }
+
+  return 'dashboard';
+}
+
+function buildManagerPath(section: ManagerSection): string {
+  return `/manager/${section}`;
+}
+
 export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageProps>) {
   const [activeSection, setActiveSection] = useState<ManagerSection>('dashboard');
   const [reports, setReports] = useState<ReportRecord[]>([]);
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
+  const [previewReportId, setPreviewReportId] = useState<string | null>(null);
+  const [previewResults, setPreviewResults] = useState<ReportResultsRecord | null>(null);
+  const [selectedPreviewVersionNumber, setSelectedPreviewVersionNumber] = useState<number | null>(null);
+  const [isPreviewPdfLoading, setIsPreviewPdfLoading] = useState(false);
   const [comment, setComment] = useState('');
   const [reasonCode, setReasonCode] = useState<string>('MANQUE_MENACE');
   const [isLoading, setIsLoading] = useState(true);
@@ -110,6 +136,44 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
     reportId: '',
     action: 'approve',
   });
+
+  useEffect(() => {
+    const syncFromLocation = () => {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      setActiveSection(parseManagerPath(window.location.pathname));
+    };
+
+    syncFromLocation();
+    window.addEventListener('popstate', syncFromLocation);
+    return () => window.removeEventListener('popstate', syncFromLocation);
+  }, []);
+
+  useEffect(() => {
+    pushBrowserPath(buildManagerPath(activeSection));
+  }, [activeSection]);
+
+  const backAction = useMemo<NavbarBackAction | null>(() => {
+    if (previewUrl) {
+      return {
+        label: 'Retour page precedente',
+        onClick: () => {
+          setPreviewUrl(null);
+          setPreviewBlobUrl(null);
+        },
+      };
+    }
+
+    if (activeSection !== 'dashboard') {
+      return {
+        label: 'Retour dashboard',
+        onClick: () => setActiveSection('dashboard'),
+      };
+    }
+
+    return null;
+  }, [activeSection, previewUrl]);
 
   useEffect(() => {
     void loadReports();
@@ -126,6 +190,7 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
       }
 
       try {
+        setIsPreviewPdfLoading(true);
         const blobUrl = await fetchReportBlobUrl(previewUrl);
         currentBlobUrl = blobUrl;
 
@@ -139,6 +204,10 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
             error instanceof Error ? error.message : 'Impossible de charger le rapport.'
           );
         }
+      } finally {
+        if (!cancelled) {
+          setIsPreviewPdfLoading(false);
+        }
       }
     };
 
@@ -151,6 +220,65 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
       }
     };
   }, [previewUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPreviewResults = async () => {
+      if (!previewReportId) {
+        setPreviewResults(null);
+        return;
+      }
+
+      try {
+        const nextResults = await fetchReportResults(previewReportId);
+        if (!cancelled) {
+          setPreviewResults(nextResults);
+        }
+      } catch {
+        if (!cancelled) {
+          setPreviewResults(null);
+        }
+      }
+    };
+
+    void loadPreviewResults();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previewReportId]);
+
+  useEffect(() => {
+    setSelectedPreviewVersionNumber(null);
+  }, [previewReportId]);
+
+  const selectedPreviewVersion = useMemo(() => {
+    if (!previewResults) {
+      return null;
+    }
+
+    return (
+      previewResults.version_history.find(
+        (version) =>
+          version.version_number ===
+          (selectedPreviewVersionNumber ?? previewResults.version_number)
+      ) ?? previewResults.version_history[0] ?? null
+    );
+  }, [previewResults, selectedPreviewVersionNumber]);
+
+  const resolvePreviewVersionDownloadUrl = (
+    versionNumber: number,
+    explicitUrl?: string | null
+  ) => {
+    if (explicitUrl) {
+      return toAbsoluteReportUrl(explicitUrl);
+    }
+    if (!previewReportId) {
+      return previewUrl ?? '';
+    }
+    return toAbsoluteReportUrl(`/reports/${previewReportId}/versions/${versionNumber}/download`);
+  };
 
   const loadReports = async () => {
     try {
@@ -202,6 +330,11 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
     setComment('');
     setReasonCode('MANQUE_MENACE');
     setValidationModal({ open: true, reportId, action });
+  };
+
+  const openPreview = (report: ReportRecord) => {
+    setPreviewUrl(report.report_url);
+    setPreviewReportId(report.id);
   };
 
   const submitValidation = async () => {
@@ -256,13 +389,20 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
   if (activeSection === 'dashboard') {
     sectionContent = (
       <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-5">
           <InsightCard
-            label="Taux d'approbation"
-            value={`${dashboardMetrics?.approval_rate ?? 0}%`}
+            label="Approbations globales"
+            value={`${dashboardMetrics?.global_approved_reports ?? 0}`}
             icon={TrendingUp}
             tone="emerald"
-            helper={`${dashboardMetrics?.approved_reports ?? 0} rapport(s) approuve(s)`}
+            helper={`Taux global: ${dashboardMetrics?.global_approval_rate ?? 0}%`}
+          />
+          <InsightCard
+            label="Mes approbations"
+            value={`${dashboardMetrics?.my_approved_reports ?? 0}`}
+            icon={TrendingUp}
+            tone="blue"
+            helper={`Mon taux: ${dashboardMetrics?.my_approval_rate ?? 0}%`}
           />
           <InsightCard
             label="Temps moyen avant validation"
@@ -272,14 +412,14 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
                 : 'N/A'
             }
             icon={TimerReset}
-            tone="blue"
+            tone="amber"
             helper="Calcul base sur les rapports decides"
           />
           <InsightCard
             label="Menaces les plus frequentes"
             value={`${dashboardMetrics?.most_frequent_threats[0]?.count ?? 0}`}
             icon={ShieldAlert}
-            tone="amber"
+            tone="red"
             helper={dashboardMetrics?.most_frequent_threats[0]?.threat_name || 'Aucune menace'}
           />
           <InsightCard
@@ -398,7 +538,7 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
                         <button
                           onClick={() => {
                             const report = reports.find((item) => item.id === app.report_id);
-                            if (report) setPreviewUrl(report.report_url);
+                            if (report) openPreview(report);
                           }}
                           className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-accent-primary hover:text-accent-primary"
                         >
@@ -443,7 +583,7 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
 
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => setPreviewUrl(report.report_url)}
+                          onClick={() => openPreview(report)}
                           className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-accent-primary hover:text-accent-primary"
                         >
                           <Eye className="h-4 w-4" />
@@ -559,7 +699,7 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
 
                     <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:flex-col lg:items-stretch">
                       <button
-                        onClick={() => setPreviewUrl(report.report_url)}
+                        onClick={() => openPreview(report)}
                         className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-accent-primary hover:text-accent-primary"
                       >
                         <Eye className="h-4 w-4" />
@@ -597,7 +737,10 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
     sectionContent = (
       <HistoryView
         history={historyItems}
-        onOpenReport={(_, url) => setPreviewUrl(toAbsoluteReportUrl(url))}
+        onOpenReport={(reportId, url) => {
+          setPreviewUrl(toAbsoluteReportUrl(url));
+          setPreviewReportId(reportId);
+        }}
         showNewAnalysisButton={false}
         title="Historique des rapports"
         subtitle="Consultez tous les rapports soumis par les secops engineers, y compris les anciennes versions et validations précédentes."
@@ -619,6 +762,7 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
           { key: 'validation', label: 'Validation', icon: History },
           { key: 'history', label: 'Historique', icon: FileText },
         ]}
+        backAction={backAction}
       />
 
       <div className="mx-auto max-w-[1400px] px-4 sm:px-6 lg:px-8 pt-40 pb-12">
@@ -731,6 +875,9 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
               onClick={() => {
                 setPreviewUrl(null);
                 setPreviewBlobUrl(null);
+                setPreviewReportId(null);
+                setPreviewResults(null);
+                setSelectedPreviewVersionNumber(null);
               }}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-1.5 text-sm font-semibold text-slate-700 transition hover:border-accent-primary hover:text-accent-primary"
             >
@@ -738,17 +885,48 @@ export function ManagerPage({ currentUserName, onLogout }: Readonly<ManagerPageP
               Fermer
             </button>
           </div>
-          {previewBlobUrl ? (
-            <iframe
-              src={previewBlobUrl}
-              className="h-full w-full border-none"
-              title="Apercu du rapport"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center text-sm text-slate-500">
-              Chargement du rapport...
+          <div className="grid h-full min-h-0 grid-cols-1 xl:grid-cols-[380px_minmax(0,1fr)]">
+            <div className="overflow-y-auto border-b border-slate-200 bg-slate-50 p-4 xl:border-b-0 xl:border-r">
+              {previewResults ? (
+                <ReportVersionHistory
+                  versions={previewResults.version_history}
+                  currentVersionNumber={previewResults.version_number}
+                  selectedVersionNumber={selectedPreviewVersion?.version_number ?? null}
+                  onSelectVersion={(version) => {
+                    setSelectedPreviewVersionNumber(version.version_number);
+                    setPreviewUrl(
+                      resolvePreviewVersionDownloadUrl(
+                        version.version_number,
+                        version.download_url
+                      )
+                    );
+                  }}
+                  subtitle="Le manager conserve ici la visibilité sur toutes les itérations du même projet."
+                />
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-500">
+                  Historique des versions indisponible pour ce rapport.
+                </div>
+              )}
             </div>
-          )}
+
+            {isPreviewPdfLoading ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500">
+                <RefreshCw className="h-8 w-8 animate-spin text-accent-primary" />
+                <p className="text-sm font-medium">Chargement du rapport de cette version...</p>
+              </div>
+            ) : previewBlobUrl ? (
+              <iframe
+                src={previewBlobUrl}
+                className="h-full w-full border-none"
+                title="Apercu du rapport"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-sm text-slate-500">
+                Chargement du rapport...
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

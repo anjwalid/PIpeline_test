@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from typing import Any
 
@@ -7,6 +8,8 @@ import requests
 
 from app.core.config import settings
 from app.services.prompts import LLM_AS_JUDGE_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 class LlmServiceError(RuntimeError):
@@ -19,6 +22,111 @@ class LlmServiceTimeoutError(LlmServiceError):
 
 class LlmServiceUnavailableError(LlmServiceError):
     pass
+
+
+class LlmGuardrailBlockedError(LlmServiceError):
+    def __init__(
+        self,
+        *,
+        message: str,
+        guardrail_name: str | None = None,
+        blocked_entity: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.guardrail_name = guardrail_name
+        self.blocked_entity = blocked_entity
+
+
+def _extract_openai_like_content(payload: dict) -> str:
+    choices = payload.get("choices") or []
+    if not choices:
+        raise ValueError("LiteLLM n a retourne aucun choix.")
+
+    message = (choices[0] or {}).get("message") or {}
+    content = message.get("content", "")
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for chunk in content:
+            if isinstance(chunk, dict) and chunk.get("type") == "text":
+                text_value = str(chunk.get("text") or "").strip()
+                if text_value:
+                    parts.append(text_value)
+            elif isinstance(chunk, str) and chunk.strip():
+                parts.append(chunk.strip())
+        content = "\n".join(parts)
+
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("LiteLLM n a retourne aucun contenu exploitable.")
+
+    return content.strip()
+
+
+def _call_litellm_chat(prompt: str, model: str) -> str:
+    if not settings.LITELLM_PROXY_URL:
+        raise RuntimeError("LITELLM_PROXY_URL est manquant.")
+    if not settings.LITELLM_API_KEY:
+        raise RuntimeError("LITELLM_API_KEY est manquant.")
+    if not model.strip():
+        raise RuntimeError("Le modele LiteLLM cible est manquant.")
+
+    path = settings.LITELLM_CHAT_COMPLETIONS_PATH or "/chat/completions"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    endpoint = f"{settings.LITELLM_PROXY_URL}{path}"
+    headers = {
+        "Authorization": f"Bearer {settings.LITELLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model.strip(),
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+    }
+
+    try:
+        response = httpx.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            timeout=settings.LITELLM_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise LlmServiceTimeoutError(
+            "Le proxy LiteLLM n a pas repondu dans le delai imparti."
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        response_text = exc.response.text.strip() if exc.response is not None else ""
+        if exc.response is not None and exc.response.status_code == 500:
+            blocked_entity_match = re.search(r"Blocked entity detected:\s*([A-Z_]+)", response_text)
+            guardrail_match = re.search(r"Guardrail:\s*([^.\"]+)", response_text)
+            if blocked_entity_match or guardrail_match:
+                blocked_entity = blocked_entity_match.group(1) if blocked_entity_match else None
+                guardrail_name = guardrail_match.group(1).strip() if guardrail_match else None
+                raise LlmGuardrailBlockedError(
+                    message=(
+                        "La demande a ete bloquee par une politique de protection des donnees "
+                        "ou de securite conversationnelle."
+                    ),
+                    guardrail_name=guardrail_name,
+                    blocked_entity=blocked_entity,
+                ) from exc
+        raise LlmServiceUnavailableError(
+            "Le proxy LiteLLM a retourne une erreur HTTP. "
+            f"status={exc.response.status_code if exc.response is not None else 'unknown'} "
+            f"body={response_text[:500]}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise LlmServiceUnavailableError(
+            "Le proxy LiteLLM est temporairement indisponible."
+        ) from exc
+
+    return _extract_openai_like_content(response.json())
 
 
 def _build_mistral_retry_config():
@@ -70,6 +178,9 @@ def extract_json_object(text: str) -> dict:
 
 
 def call_mistral(prompt: str) -> str:
+    if settings.LITELLM_ENABLED:
+        return _call_litellm_chat(prompt, settings.LITELLM_MISTRAL_MODEL)
+
     if not settings.MISTRAL_API_KEY:
         raise RuntimeError("La variable d environnement MISTRAL_API_KEY est obligatoire.")
 
@@ -139,6 +250,9 @@ def call_mistral(prompt: str) -> str:
 
 
 def call_gemini(prompt: str) -> str:
+    if settings.LITELLM_ENABLED:
+        return _call_litellm_chat(prompt, settings.LITELLM_GEMINI_MODEL)
+
     if not settings.GEMINI_API_KEY:
         raise RuntimeError("La variable d environnement GEMINI_API_KEY est obligatoire.")
 
@@ -159,6 +273,10 @@ def call_gemini(prompt: str) -> str:
 
 
 def call_ollama(prompt: str, model: str | None = None) -> str:
+    if settings.LITELLM_ENABLED:
+        resolved_model = (model or settings.LITELLM_OLLAMA_MODEL).strip()
+        return _call_litellm_chat(prompt, resolved_model)
+
     resolved_model = (model or settings.OLLAMA_JUDGE_MODEL).strip()
     if not resolved_model:
         raise RuntimeError("Le modele Ollama local est manquant.")

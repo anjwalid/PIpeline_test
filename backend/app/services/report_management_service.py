@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
+import json
 import logging
 from pathlib import Path
 from collections import Counter
+import re
+import shutil
 
 from fastapi import HTTPException, status
+from PIL import Image, UnidentifiedImageError
 
 from app.core.auth import AuthenticatedUser, user_has_role
+from app.core.config import settings
 from app.core.exceptions import AnalysisStepError
 from app.repositories.manager_review_feedback_repository import (
     ManagerReviewFeedbackRepository,
@@ -21,6 +27,7 @@ from app.schemas.report import (
     ReportsByMonthEntry,
     RiskyApplicationEntry,
     ReportAnnotationResponse,
+    ReportResultVersionResponse,
     ThreatFrequencyEntry,
     ReportResultsResponse,
     ReportResponse,
@@ -37,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 class ReportManagementService:
     DOWNLOAD_PATH_TEMPLATE = "/reports/{report_id}/download"
+    VERSION_DOWNLOAD_PATH_TEMPLATE = "/reports/{report_id}/versions/{version_number}/download"
     ALLOWED_STATUS_TRANSITIONS = {
         "DRAFT": {"PENDING"},
         "REJECTED": {"PENDING"},
@@ -53,6 +61,7 @@ class ReportManagementService:
     PDF_CONTENT_TYPE = "application/pdf"
     DEFAULT_DFD_REFERENCE = "DFD-01"
     ALLOWED_DFD_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+    ALLOWED_DFD_FORMATS = {"PNG", "JPEG", "WEBP"}
     SECOPS_REASON_LABELS = {
         "INCOHERENCE_CONTEXTE_LLM": "Incoherence de contexte detectee dans la sortie LLM",
         "MANQUE_MENACE": "Menace manquante",
@@ -73,6 +82,184 @@ class ReportManagementService:
     }
     SECOPS_ROLE = "secops_engineer"
     MANAGER_ROLE = "manager"
+
+    @staticmethod
+    def _normalize_text(value: str | None) -> str:
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+        return any(keyword in text for keyword in keywords)
+
+    @staticmethod
+    def _compute_attack_surface_score(
+        description_text: str,
+        selected_threats: list[dict],
+    ) -> int:
+        score = 0
+
+        if ReportManagementService._contains_any(
+            description_text,
+            ("internet", "public", "publique", "externe", "web", "mobile"),
+        ):
+            score += 6
+        if ReportManagementService._contains_any(
+            description_text,
+            ("api", "rest", "graphql", "endpoint", "microservice"),
+        ):
+            score += 4
+        if ReportManagementService._contains_any(
+            description_text,
+            ("upload", "fichier", "piece jointe", "document"),
+        ):
+            score += 3
+        if ReportManagementService._contains_any(
+            description_text,
+            ("keycloak", "sso", "oauth", "openid", "authentification", "identity"),
+        ):
+            score += 3
+        if ReportManagementService._contains_any(
+            description_text,
+            ("tiers", "partenaire", "integration", "broker", "mq", "kafka", "rabbitmq"),
+        ):
+            score += 2
+        if any(
+            ReportManagementService._contains_any(
+                " ".join(
+                    [
+                        str(threat.get("name") or ""),
+                        str(threat.get("description") or ""),
+                        " ".join(threat.get("attack_scenarios") or []),
+                    ]
+                ).lower(),
+                ("network", "reseau", "api", "session", "token", "auth"),
+            )
+            for threat in selected_threats
+        ):
+            score += 2
+
+        return min(score, 20)
+
+    @staticmethod
+    def _compute_business_impact_score(description_text: str) -> int:
+        score = 0
+
+        if ReportManagementService._contains_any(
+            description_text,
+            ("personnel", "personnelles", "client", "rh", "employe", "utilisateur"),
+        ):
+            score += 6
+        if ReportManagementService._contains_any(
+            description_text,
+            ("banque", "bancaire", "paiement", "transaction", "compte", "finance"),
+        ):
+            score += 8
+        if ReportManagementService._contains_any(
+            description_text,
+            ("confidentiel", "sensible", "secret", "reglementaire", "conformite"),
+        ):
+            score += 4
+        if ReportManagementService._contains_any(
+            description_text,
+            ("critique", "production", "metier", "pilotage"),
+        ):
+            score += 3
+
+        return min(score, 20)
+
+    @staticmethod
+    def _compute_threat_severity_score(selected_threats: list[dict]) -> int:
+        if not selected_threats:
+            return 0
+
+        base_score = 0.0
+        severity_keywords = {
+            4.0: ("rce", "remote code execution", "privilege escalation", "account takeover"),
+            3.0: ("injection", "xss", "csrf", "ssrf", "deserialization", "auth bypass"),
+            2.0: ("disclosure", "exposure", "leak", "bypass", "spoofing"),
+        }
+
+        for threat in selected_threats:
+            threat_text = " ".join(
+                [
+                    str(threat.get("name") or ""),
+                    str(threat.get("description") or ""),
+                    " ".join(threat.get("attack_scenarios") or []),
+                ]
+            ).lower()
+
+            matched_weight = 1.5
+            for weight, keywords in severity_keywords.items():
+                if ReportManagementService._contains_any(threat_text, keywords):
+                    matched_weight = weight
+                    break
+            base_score += matched_weight
+
+        scenario_count = sum(len(threat.get("attack_scenarios") or []) for threat in selected_threats)
+        weighted_score = base_score + min(scenario_count * 0.6, 6)
+
+        return min(round(weighted_score), 25)
+
+    @staticmethod
+    def _compute_reference_exposure_score(selected_threats: list[dict]) -> int:
+        score = 0
+        cve_reference_count = 0
+        high_cvss_count = 0
+        critical_cvss_count = 0
+
+        for threat in selected_threats:
+            references = threat.get("references") or []
+            if not isinstance(references, list):
+                references = []
+
+            threat_blob = json.dumps(threat, ensure_ascii=False).lower()
+            cve_reference_count += len(re.findall(r"cve-\d{4}-\d{4,7}", threat_blob))
+
+            for reference in references:
+                if not isinstance(reference, dict):
+                    continue
+                raw_cvss = reference.get("cvss_score")
+                try:
+                    cvss_score = float(raw_cvss)
+                except (TypeError, ValueError):
+                    continue
+                if cvss_score >= 9:
+                    critical_cvss_count += 1
+                elif cvss_score >= 7:
+                    high_cvss_count += 1
+
+        score += min(cve_reference_count * 2, 6)
+        score += min(high_cvss_count * 2, 4)
+        score += min(critical_cvss_count * 3, 5)
+
+        return min(score, 15)
+
+    @staticmethod
+    def _compute_protection_adjustment(
+        threat_count: int,
+        mitigation_count: int,
+        description_text: str,
+    ) -> int:
+        if threat_count <= 0:
+            return 0
+
+        score = 0
+        mitigations_per_threat = mitigation_count / max(threat_count, 1)
+
+        if mitigations_per_threat < 1:
+            score += 8
+        elif mitigations_per_threat < 2:
+            score += 4
+        elif mitigations_per_threat >= 3:
+            score -= 4
+
+        if ReportManagementService._contains_any(
+            description_text,
+            ("mfa", "chiffrement", "journalisation", "segmentation", "waf", "zero trust"),
+        ):
+            score -= 3
+
+        return max(-10, min(score, 10))
 
     @staticmethod
     def ensure_schema() -> None:
@@ -212,6 +399,53 @@ class ReportManagementService:
         return text or ReportManagementService.DEFAULT_DFD_REFERENCE
 
     @staticmethod
+    def _archive_dfd_asset(
+        *,
+        report_id: str,
+        version_number: int,
+        dfd_image_path: str | None,
+    ) -> str | None:
+        normalized_path = (dfd_image_path or "").strip() or None
+        if not normalized_path:
+            return None
+
+        if MinioService.parse_minio_uri(normalized_path):
+            return normalized_path
+
+        source_path = Path(normalized_path)
+        if not source_path.exists():
+            return normalized_path
+
+        suffix = source_path.suffix.lower() or ".png"
+        object_key = f"reports/{report_id}/versions/v{version_number}/dfd/{source_path.name}"
+        normalized_suffix = suffix.removeprefix(".")
+        content_type = f"image/{'jpeg' if normalized_suffix == 'jpg' else normalized_suffix}"
+
+        try:
+            upload_result = MinioService.upload_file(
+                str(source_path),
+                object_key=object_key,
+                content_type=content_type,
+            )
+            return MinioService.build_minio_uri(
+                upload_result["bucket"],
+                upload_result["object_key"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "Archivage MinIO du DFD impossible pour report=%s version=%s, fallback local: %s",
+                report_id,
+                version_number,
+                exc,
+            )
+
+        archive_dir = Path(__file__).resolve().parents[2] / "resources" / "archived_dfd" / report_id
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = archive_dir / f"v{version_number}{suffix}"
+        shutil.copy2(source_path, archive_path)
+        return str(archive_path.resolve())
+
+    @staticmethod
     def _normalize_selected_threats(selected_threats: list[EditableThreat] | list[dict]) -> list[dict]:
         normalized: list[dict] = []
         for raw in selected_threats:
@@ -220,6 +454,7 @@ class ReportManagementService:
                 description = (raw.description or "").strip()
                 attack_scenarios = ReportManagementService._normalize_text_list(raw.attack_scenarios)
                 mitigations = ReportManagementService._normalize_text_list(raw.mitigations)
+                references: list[dict] = []
             else:
                 threat_name = str(raw.get("name") or "").strip()
                 description = str(raw.get("description") or "").strip()
@@ -227,6 +462,25 @@ class ReportManagementService:
                     raw.get("attack_scenarios")
                 )
                 mitigations = ReportManagementService._normalize_text_list(raw.get("mitigations"))
+                references = []
+                for reference in raw.get("references") or []:
+                    if not isinstance(reference, dict):
+                        continue
+
+                    reference_code = str(reference.get("reference_menace") or "").strip()
+                    reference_name = str(reference.get("nom_reference") or "").strip()
+                    reference_link = str(reference.get("lien") or "").strip()
+
+                    if not any((reference_code, reference_name, reference_link)):
+                        continue
+
+                    references.append(
+                        {
+                            "reference_menace": reference_code,
+                            "nom_reference": reference_name,
+                            "lien": reference_link,
+                        }
+                    )
 
             if not threat_name:
                 continue
@@ -237,6 +491,7 @@ class ReportManagementService:
                     "description": description,
                     "attack_scenarios": attack_scenarios,
                     "mitigations": mitigations,
+                    "references": references,
                 }
             )
         return normalized
@@ -268,12 +523,44 @@ class ReportManagementService:
     def _serialize_report_results(report_results_row: dict) -> ReportResultsResponse:
         selected_threats = report_results_row.get("selected_threats") or []
         normalized = ReportManagementService._normalize_selected_threats(selected_threats)
+        version_history_rows = ReportRepository.get_report_result_versions(
+            str(report_results_row["report_id"])
+        )
+        version_history = [
+            ReportResultVersionResponse(
+                version_number=int(version_row.get("version_number") or 1),
+                version_label=str(version_row.get("version_label") or f"v{int(version_row.get('version_number') or 1)}"),
+                app_name=str(version_row.get("app_name") or "").strip(),
+                developer_name=str(version_row.get("developer_name") or "").strip(),
+                application_description=str(version_row.get("application_description") or "").strip(),
+                selected_threats=[
+                    EditableThreat(**item)
+                    for item in ReportManagementService._normalize_selected_threats(
+                        version_row.get("selected_threats") or []
+                    )
+                ],
+                dfd_image_path=version_row.get("dfd_image_path"),
+                dfd_reference=ReportManagementService._normalize_dfd_reference(
+                    version_row.get("dfd_reference")
+                ),
+                download_url=ReportManagementService.VERSION_DOWNLOAD_PATH_TEMPLATE.format(
+                    report_id=str(report_results_row["report_id"]),
+                    version_number=int(version_row.get("version_number") or 1),
+                ),
+                created_by_username=version_row.get("created_by_username"),
+                created_by_email=version_row.get("created_by_email"),
+                change_reason=version_row.get("change_reason"),
+                created_at=version_row["created_at"],
+            )
+            for version_row in version_history_rows
+        ]
 
         return ReportResultsResponse(
             report_id=str(report_results_row["report_id"]),
             app_name=report_results_row["app_name"],
             developer_name=report_results_row["developer_name"],
             application_description=report_results_row["application_description"],
+            version_number=int(report_results_row.get("version_number") or 1),
             application_version=ReportManagementService._format_application_version(
                 report_results_row.get("version_number")
             ),
@@ -283,6 +570,7 @@ class ReportManagementService:
                 report_results_row.get("dfd_reference")
             ),
             updated_at=report_results_row.get("updated_at"),
+            version_history=version_history,
         )
 
     @staticmethod
@@ -295,10 +583,20 @@ class ReportManagementService:
         selected_threats: list[dict],
         dfd_image_path: str | None,
         dfd_reference: str | None,
+        file_name: str | None,
+        file_type: str | None,
+        file_size: int | None,
+        minio_bucket: str | None,
+        minio_object_key: str | None,
         generated_by: AuthenticatedUser,
     ) -> ReportResultsResponse:
         normalized_threats = ReportManagementService._normalize_selected_threats(selected_threats)
         normalized_dfd_reference = ReportManagementService._normalize_dfd_reference(dfd_reference)
+        archived_dfd_image_path = ReportManagementService._archive_dfd_asset(
+            report_id=report_id,
+            version_number=1,
+            dfd_image_path=dfd_image_path,
+        )
         row = ReportRepository.upsert_report_results(
             report_id=report_id,
             app_name=(app_name or "").strip() or "Application",
@@ -306,7 +604,7 @@ class ReportManagementService:
             application_description=(application_description or "").strip()
             or ReportManagementService.DEFAULT_DESCRIPTION,
             selected_threats=normalized_threats,
-            dfd_image_path=(dfd_image_path or "").strip() or None,
+            dfd_image_path=archived_dfd_image_path,
             dfd_reference=normalized_dfd_reference,
             version_number=1,
             generated_by=generated_by,
@@ -320,6 +618,11 @@ class ReportManagementService:
             selected_threats=normalized_threats,
             dfd_image_path=row.get("dfd_image_path"),
             dfd_reference=normalized_dfd_reference,
+            file_name=file_name,
+            file_type=file_type,
+            file_size=file_size,
+            minio_bucket=minio_bucket,
+            minio_object_key=minio_object_key,
             actor=generated_by,
             change_reason="Version initiale generee automatiquement.",
         )
@@ -347,7 +650,10 @@ class ReportManagementService:
         if not report_row:
             raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
 
-        ReportManagementService._ensure_secops_access_to_report(report_row, user)
+        if user_has_role(user, ReportManagementService.MANAGER_ROLE):
+            ReportManagementService._ensure_manager_access_to_report(report_row, user)
+        else:
+            ReportManagementService._ensure_secops_access_to_report(report_row, user)
 
         row = ReportRepository.get_report_results(report_id)
         if not row:
@@ -402,6 +708,12 @@ class ReportManagementService:
         next_description = (application_description or "").strip() or ReportManagementService.DEFAULT_DESCRIPTION
         next_dfd_image_path = (dfd_image_path or "").strip() or None
         next_dfd_reference = ReportManagementService._normalize_dfd_reference(dfd_reference)
+        next_version_number = int(existing.get("version_number") or 1) + 1
+        archived_dfd_image_path = ReportManagementService._archive_dfd_asset(
+            report_id=report_id,
+            version_number=next_version_number,
+            dfd_image_path=next_dfd_image_path,
+        )
 
         if not ReportManagementService._results_payload_changed(
             existing,
@@ -409,7 +721,7 @@ class ReportManagementService:
             developer_name=next_developer_name,
             application_description=next_description,
             selected_threats=normalized,
-            dfd_image_path=next_dfd_image_path,
+            dfd_image_path=archived_dfd_image_path,
             dfd_reference=next_dfd_reference,
         ):
             return ReportManagementService._serialize_report_results(existing)
@@ -429,14 +741,13 @@ class ReportManagementService:
             free_comment,
         )
 
-        next_version_number = int(existing.get("version_number") or 1) + 1
         updated = ReportRepository.update_report_results(
             report_id=report_id,
             app_name=next_app_name,
             developer_name=next_developer_name,
             application_description=next_description,
             selected_threats=normalized,
-            dfd_image_path=next_dfd_image_path,
+            dfd_image_path=archived_dfd_image_path,
             dfd_reference=next_dfd_reference,
             version_number=next_version_number,
         )
@@ -453,8 +764,13 @@ class ReportManagementService:
             developer_name=next_developer_name,
             application_description=next_description,
             selected_threats=normalized,
-            dfd_image_path=next_dfd_image_path,
+            dfd_image_path=archived_dfd_image_path,
             dfd_reference=next_dfd_reference,
+            file_name=None,
+            file_type=None,
+            file_size=None,
+            minio_bucket=None,
+            minio_object_key=None,
             actor=actor,
             change_reason=change_reason,
         )
@@ -465,7 +781,7 @@ class ReportManagementService:
             app_name=next_app_name,
             application_description=next_description,
             selected_threats=normalized,
-            dfd_image_path=next_dfd_image_path,
+            dfd_image_path=archived_dfd_image_path,
             dfd_reference=next_dfd_reference,
             actor=actor,
             correction_reason=change_reason,
@@ -614,6 +930,15 @@ class ReportManagementService:
             dfd_reference=dfd_reference,
             version_number=int(editable_results.get("version_number") or 1),
         )
+        ReportRepository.update_report_result_version_file_metadata(
+            report_id=report_id,
+            version_number=int(editable_results.get("version_number") or 1),
+            file_name=report_file_name,
+            file_type=ReportManagementService.PDF_CONTENT_TYPE,
+            file_size=upload_result["file_size"],
+            minio_bucket=upload_result["bucket"],
+            minio_object_key=upload_result["object_key"],
+        )
         AuditService.log_action(
             actor=actor,
             action_type="REGENERATE_REPORT",
@@ -732,6 +1057,28 @@ class ReportManagementService:
         file_bytes = file_stream.read()
         if not file_bytes:
             raise HTTPException(status_code=400, detail="Le fichier DFD est vide.")
+        if len(file_bytes) > settings.MAX_DFD_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail="Le fichier DFD depasse la taille maximale autorisee.",
+            )
+
+        try:
+            with Image.open(BytesIO(file_bytes)) as image:
+                image.verify()
+            with Image.open(BytesIO(file_bytes)) as image:
+                detected_format = str(image.format or "").upper()
+        except (UnidentifiedImageError, OSError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Le fichier DFD fourni n'est pas une image valide.",
+            ) from exc
+
+        if detected_format not in ReportManagementService.ALLOWED_DFD_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail="Le format reel de l'image DFD n'est pas autorise.",
+            )
 
         object_key = (
             f"reports/{report_id}/dfd/"
@@ -813,6 +1160,107 @@ class ReportManagementService:
             metadata={"minio_bucket": report_row["minio_bucket"]},
         )
         return ReportManagementService._serialize_report(report_row)
+
+    @staticmethod
+    def get_version_download_payload(
+        report_id: str,
+        version_number: int,
+        user: AuthenticatedUser,
+    ) -> dict:
+        report_row = ReportRepository.get_report_by_id(report_id)
+        if not report_row:
+            raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+
+        if user_has_role(user, ReportManagementService.MANAGER_ROLE):
+            ReportManagementService._ensure_manager_access_to_report(report_row, user)
+        else:
+            ReportManagementService._ensure_secops_access_to_report(report_row, user)
+
+        version_rows = ReportRepository.get_report_result_versions(report_id)
+        target_version = next(
+            (row for row in version_rows if int(row.get("version_number") or 0) == version_number),
+            None,
+        )
+        if not target_version:
+            raise HTTPException(status_code=404, detail="Version de rapport introuvable.")
+
+        bucket = target_version.get("minio_bucket")
+        object_key = target_version.get("minio_object_key")
+        file_name = target_version.get("file_name") or f"rapport-v{version_number}.pdf"
+        file_type = target_version.get("file_type") or ReportManagementService.PDF_CONTENT_TYPE
+
+        if not bucket or not object_key:
+            selected_threats = ReportManagementService._normalize_selected_threats(
+                target_version.get("selected_threats") or []
+            )
+            application_version = ReportManagementService._format_application_version(version_number)
+            developer_name = str(target_version.get("developer_name") or user.display_name or user.username or "Non renseigne").strip()
+            app_name = str(target_version.get("app_name") or report_row.get("title") or "Application").strip()
+            description = str(
+                target_version.get("application_description")
+                or report_row.get("description")
+                or ReportManagementService.DEFAULT_DESCRIPTION
+            ).strip()
+            original_dfd_image_path = (target_version.get("dfd_image_path") or "").strip() or None
+            dfd_image_path = ReportManagementService._archive_dfd_asset(
+                report_id=report_id,
+                version_number=version_number,
+                dfd_image_path=original_dfd_image_path,
+            )
+            if dfd_image_path != original_dfd_image_path:
+                ReportRepository.update_report_result_version_dfd_path(
+                    report_id=report_id,
+                    version_number=version_number,
+                    dfd_image_path=dfd_image_path,
+                )
+            dfd_reference = ReportManagementService._normalize_dfd_reference(
+                target_version.get("dfd_reference")
+            )
+            report_file_name = (
+                f"rapport-{build_safe_slug(developer_name)}-"
+                f"{build_safe_slug(app_name)}-{application_version}.pdf"
+            )
+            regenerated_pdf_path = generate_report_pdf(
+                app_name=app_name,
+                developer_name=developer_name,
+                generated_description=description,
+                selected_threats=selected_threats,
+                dfd_image_path=dfd_image_path,
+                dfd_reference=dfd_reference,
+                application_version=application_version,
+                report_file_name=report_file_name,
+            )
+            return {
+                "report": {
+                    "file_name": report_file_name,
+                    "file_type": ReportManagementService.PDF_CONTENT_TYPE,
+                },
+                "local_path": str(Path(regenerated_pdf_path).resolve()),
+                "object_response": None,
+            }
+
+        if bucket == MinioService.LOCAL_BUCKET:
+            local_path = Path(object_key)
+            if not local_path.exists():
+                raise HTTPException(status_code=404, detail="Fichier local de cette version introuvable.")
+            return {
+                "report": {
+                    "file_name": file_name,
+                    "file_type": file_type,
+                },
+                "local_path": str(local_path),
+                "object_response": None,
+            }
+
+        object_response = MinioService.get_object(bucket, object_key)
+        return {
+            "report": {
+                "file_name": file_name,
+                "file_type": file_type,
+            },
+            "local_path": None,
+            "object_response": object_response,
+        }
 
     @staticmethod
     def list_my_reports(user: AuthenticatedUser) -> list[ReportResponse]:
@@ -915,7 +1363,7 @@ class ReportManagementService:
                     "error_type": "REPORT_DOWNLOAD_ERROR",
                     "step": "report_storage_read",
                     "message": "Impossible de recuperer le rapport depuis le stockage.",
-                    "cause": str(exc),
+                    "cause": None,
                 },
             ) from exc
 
@@ -1051,6 +1499,53 @@ class ReportManagementService:
         return ReportManagementService.get_report(report_id, actor)
 
     @staticmethod
+    def delete_report(report_id: str, actor: AuthenticatedUser) -> None:
+        ReportManagementService._ensure_secops_role(actor)
+        report_row = ReportRepository.get_report_by_id(report_id)
+        if not report_row:
+            raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+
+        ReportManagementService._ensure_report_owner(report_row, actor)
+        if report_row["status"] != "DRAFT":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Seuls les rapports en brouillon peuvent etre supprimes.",
+            )
+
+        try:
+            storage_bucket = report_row.get("minio_bucket")
+            storage_object_key = report_row.get("minio_object_key")
+            if storage_bucket and storage_object_key:
+                MinioService.delete_object(storage_bucket, storage_object_key)
+        except Exception:
+            logger.warning(
+                "Suppression stockage rapport en echec: report_id=%s bucket=%s object_key=%s",
+                report_id,
+                report_row.get("minio_bucket"),
+                report_row.get("minio_object_key"),
+                exc_info=True,
+            )
+
+        deleted = ReportRepository.delete_report(report_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=ReportManagementService.REPORT_NOT_FOUND)
+
+        AuditService.log_action(
+            actor=actor,
+            action_type="DELETE_REPORT",
+            entity_type="report",
+            entity_id=report_id,
+            entity_label=report_row["title"],
+            old_values={
+                "status": report_row["status"],
+                "file_name": report_row.get("file_name"),
+                "minio_bucket": report_row.get("minio_bucket"),
+                "minio_object_key": report_row.get("minio_object_key"),
+            },
+            comment="Suppression du brouillon SecOps.",
+        )
+
+    @staticmethod
     def get_manager_dashboard_metrics(user: AuthenticatedUser) -> ManagerDashboardMetricsResponse:
         ReportManagementService._ensure_manager_role(user)
         reports = [
@@ -1061,13 +1556,29 @@ class ReportManagementService:
         results_by_report = ReportRepository.get_report_results_for_reports(report_ids)
 
         total_reports = len(reports)
-        approved_reports = sum(1 for report in reports if report["status"] == "APPROVED")
-        final_decisions = [
+        global_approved_reports = sum(1 for report in reports if report["status"] == "APPROVED")
+        global_final_decisions = [
             report for report in reports if report["status"] in {"APPROVED", "REJECTED"}
         ]
-        approval_rate = (
-            round((approved_reports / len(final_decisions)) * 100, 2)
-            if final_decisions
+        global_approval_rate = (
+            round((global_approved_reports / len(global_final_decisions)) * 100, 2)
+            if global_final_decisions
+            else 0.0
+        )
+        my_final_decisions = [
+            report
+            for report in reports
+            if report["status"] in {"APPROVED", "REJECTED"}
+            and str(report.get("validated_by") or "") == str(user.user_id)
+        ]
+        my_approved_reports = sum(
+            1
+            for report in my_final_decisions
+            if report["status"] == "APPROVED"
+        )
+        my_approval_rate = (
+            round((my_approved_reports / len(my_final_decisions)) * 100, 2)
+            if my_final_decisions
             else 0.0
         )
 
@@ -1102,7 +1613,46 @@ class ReportManagementService:
                 mitigation_count += len(threat.get("mitigations") or [])
 
             threat_count = len(selected_threats)
-            risk_score = (threat_count * 5) + (scenario_count * 2) + mitigation_count
+            application_description = ReportManagementService._normalize_text(
+                report_result.get("application_description")
+            )
+
+            attack_surface_score = ReportManagementService._compute_attack_surface_score(
+                application_description,
+                selected_threats,
+            )
+            business_impact_score = ReportManagementService._compute_business_impact_score(
+                application_description
+            )
+            threat_severity_score = ReportManagementService._compute_threat_severity_score(
+                selected_threats
+            )
+            reference_exposure_score = ReportManagementService._compute_reference_exposure_score(
+                selected_threats
+            )
+            protection_adjustment = ReportManagementService._compute_protection_adjustment(
+                threat_count,
+                mitigation_count,
+                application_description,
+            )
+
+            # Score manager compose :
+            # - surface d attaque (0-20)
+            # - impact metier / sensibilite des donnees (0-20)
+            # - richesse et severite des menaces/scenarios (0-25)
+            # - exposition technique issue des references CVE/CVSS quand presentes (0-15)
+            # - ajustement protections / mitigations (-10 a +10)
+            risk_score = max(
+                0,
+                min(
+                    100,
+                    attack_surface_score
+                    + business_impact_score
+                    + threat_severity_score
+                    + reference_exposure_score
+                    + protection_adjustment,
+                ),
+            )
 
             riskiest_apps.append(
                 {
@@ -1147,8 +1697,12 @@ class ReportManagementService:
 
         return ManagerDashboardMetricsResponse(
             total_reports=total_reports,
-            approved_reports=approved_reports,
-            approval_rate=approval_rate,
+            approved_reports=global_approved_reports,
+            approval_rate=global_approval_rate,
+            global_approved_reports=global_approved_reports,
+            global_approval_rate=global_approval_rate,
+            my_approved_reports=my_approved_reports,
+            my_approval_rate=my_approval_rate,
             average_validation_time_hours=average_validation_time_hours,
             reports_by_month=reports_by_month,
             most_frequent_threats=most_frequent_threats,

@@ -109,6 +109,11 @@ class ReportRepository:
                         selected_threats JSONB NOT NULL,
                         dfd_image_path TEXT,
                         dfd_reference TEXT,
+                        file_name TEXT,
+                        file_type TEXT,
+                        file_size BIGINT,
+                        minio_bucket TEXT,
+                        minio_object_key TEXT,
                         created_by UUID,
                         created_by_username TEXT,
                         created_by_email TEXT,
@@ -116,6 +121,36 @@ class ReportRepository:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         CONSTRAINT uq_report_result_versions UNIQUE (report_id, version_number)
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE report_result_versions
+                    ADD COLUMN IF NOT EXISTS file_name TEXT
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE report_result_versions
+                    ADD COLUMN IF NOT EXISTS file_type TEXT
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE report_result_versions
+                    ADD COLUMN IF NOT EXISTS file_size BIGINT
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE report_result_versions
+                    ADD COLUMN IF NOT EXISTS minio_bucket TEXT
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE report_result_versions
+                    ADD COLUMN IF NOT EXISTS minio_object_key TEXT
                     """
                 )
                 conn.commit()
@@ -274,6 +309,24 @@ class ReportRepository:
             conn.close()
 
     @staticmethod
+    def get_report_result_versions(report_id: str) -> list[dict]:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM report_result_versions
+                    WHERE report_id = %s
+                    ORDER BY version_number DESC, created_at DESC
+                    """,
+                    (report_id,),
+                )
+                return cur.fetchall()
+        finally:
+            conn.close()
+
+    @staticmethod
     def get_report_results_for_reports(report_ids: Iterable[str]) -> dict[str, dict]:
         report_ids = list(report_ids)
         if not report_ids:
@@ -353,6 +406,11 @@ class ReportRepository:
         selected_threats: list[dict],
         dfd_image_path: str | None,
         dfd_reference: str | None,
+        file_name: str | None,
+        file_type: str | None,
+        file_size: int | None,
+        minio_bucket: str | None,
+        minio_object_key: str | None,
         actor: AuthenticatedUser,
         change_reason: str | None,
     ) -> None:
@@ -371,12 +429,17 @@ class ReportRepository:
                         selected_threats,
                         dfd_image_path,
                         dfd_reference,
+                        file_name,
+                        file_type,
+                        file_size,
+                        minio_bucket,
+                        minio_object_key,
                         created_by,
                         created_by_username,
                         created_by_email,
                         change_reason
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (report_id, version_number) DO NOTHING
                     """,
                     (
@@ -389,10 +452,81 @@ class ReportRepository:
                         json.dumps(selected_threats, ensure_ascii=False),
                         dfd_image_path,
                         dfd_reference,
+                        file_name,
+                        file_type,
+                        file_size,
+                        minio_bucket,
+                        minio_object_key,
                         str(actor.user_id),
                         actor.display_name,
                         actor.email,
                         change_reason,
+                    ),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_report_result_version_file_metadata(
+        *,
+        report_id: str,
+        version_number: int,
+        file_name: str,
+        file_type: str,
+        file_size: int | None,
+        minio_bucket: str,
+        minio_object_key: str,
+    ) -> None:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE report_result_versions
+                    SET file_name = %s,
+                        file_type = %s,
+                        file_size = %s,
+                        minio_bucket = %s,
+                        minio_object_key = %s
+                    WHERE report_id = %s
+                      AND version_number = %s
+                    """,
+                    (
+                        file_name,
+                        file_type,
+                        file_size,
+                        minio_bucket,
+                        minio_object_key,
+                        report_id,
+                        version_number,
+                    ),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_report_result_version_dfd_path(
+        *,
+        report_id: str,
+        version_number: int,
+        dfd_image_path: str | None,
+    ) -> None:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE report_result_versions
+                    SET dfd_image_path = %s
+                    WHERE report_id = %s
+                      AND version_number = %s
+                    """,
+                    (
+                        dfd_image_path,
+                        report_id,
+                        version_number,
                     ),
                 )
                 conn.commit()
@@ -696,5 +830,45 @@ class ReportRepository:
 
                 conn.commit()
                 return updated
+        finally:
+            conn.close()
+
+    @staticmethod
+    def delete_report(report_id: str) -> bool:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM manager_review_feedback
+                    WHERE report_id = %s
+                    """,
+                    (report_id,),
+                )
+                cur.execute(
+                    """
+                    DELETE FROM report_annotations
+                    WHERE report_id = %s
+                    """,
+                    (report_id,),
+                )
+                cur.execute(
+                    """
+                    DELETE FROM report_status_history
+                    WHERE report_id = %s
+                    """,
+                    (report_id,),
+                )
+                cur.execute(
+                    """
+                    DELETE FROM reports
+                    WHERE id = %s
+                    RETURNING id
+                    """,
+                    (report_id,),
+                )
+                deleted = cur.fetchone()
+                conn.commit()
+                return deleted is not None
         finally:
             conn.close()

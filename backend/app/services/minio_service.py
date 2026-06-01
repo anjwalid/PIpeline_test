@@ -188,3 +188,20 @@ class MinioService:
             raise RuntimeError(
                 f"Echec lecture MinIO bucket='{bucket_name}' object_key='{object_key}': {e}"
             ) from e
+
+    @staticmethod
+    def delete_object(bucket_name: str, object_key: str) -> None:
+        if bucket_name == MinioService.LOCAL_BUCKET:
+            local_path = Path(object_key)
+            if local_path.exists():
+                local_path.unlink()
+            return
+
+        client = MinioService._client()
+
+        try:
+            client.remove_object(bucket_name, object_key)
+        except S3Error as e:
+            raise RuntimeError(
+                f"Echec suppression MinIO bucket='{bucket_name}' object_key='{object_key}': {e}"
+            ) from e

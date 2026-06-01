@@ -7,8 +7,21 @@ import { clearApplicationSession, performStrongLogout } from './auth/session';
 import { SecOpsPage } from './pages/secops/SecOpsPage';
 import { ManagerPage } from './pages/manager/ManagerPage';
 import { AdminPage } from './pages/admin/AdminPage';
+import { replaceBrowserPath } from './utils/navigation';
 
 let authInitPromise: Promise<boolean> | null = null;
+
+function defaultPathForRole(role: UserRole): string {
+  if (role === 'secops_engineer') return '/secops/dashboard';
+  if (role === 'manager') return '/manager/dashboard';
+  return '/admin/dashboard';
+}
+
+function rootPrefixForRole(role: UserRole): string {
+  if (role === 'secops_engineer') return '/secops';
+  if (role === 'manager') return '/manager';
+  return '/admin';
+}
 
 function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
@@ -87,6 +100,18 @@ function App() {
       console.error('Erreur logout Keycloak :', error);
     }
   };
+
+  useEffect(() => {
+    if (!isAuthenticated || !userRole || typeof window === 'undefined') {
+      return;
+    }
+
+    const roleRoot = rootPrefixForRole(userRole);
+    const currentPath = window.location.pathname;
+    if (currentPath === '/' || !currentPath.startsWith(roleRoot)) {
+      replaceBrowserPath(defaultPathForRole(userRole));
+    }
+  }, [isAuthenticated, userRole]);
 
   if (isAuthLoading) {
     return (

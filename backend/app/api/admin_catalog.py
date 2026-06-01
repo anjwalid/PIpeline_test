@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 
-from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.auth import AuthenticatedUser, get_admin_user
+from app.core.config import settings
+from app.core.rate_limit import build_rate_limit_dependency
 from app.schemas.catalog import (
     CatalogRefreshResponse,
     CatalogReferenceGroupResponse,
@@ -19,21 +21,31 @@ from app.schemas.catalog import (
 from app.services.audit_service import AuditService
 from app.services.catalog_service import CatalogService
 
-router = APIRouter(prefix="/admin/catalog/threats", tags=["admin-catalog"])
+admin_rate_limit = build_rate_limit_dependency(
+    prefix="admin-catalog",
+    limit=settings.ADMIN_RATE_LIMIT_COUNT,
+    window_seconds=settings.ADMIN_RATE_LIMIT_WINDOW_SECONDS,
+)
+
+router = APIRouter(
+    prefix="/admin/catalog/threats",
+    tags=["admin-catalog"],
+    dependencies=[Depends(admin_rate_limit)],
+)
 THREAT_NOT_FOUND = "Menace non trouvee"
 REFERENCE_NOT_FOUND = "Reference non trouvee"
 INTERNAL_SOLUTION_NOT_FOUND = "Solution interne non trouvee"
 
 
 @router.get("/internal-solutions", response_model=list[InternalSecuritySolutionResponse])
-def list_internal_solutions(_: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+def list_internal_solutions(_: Annotated[AuthenticatedUser, Depends(get_admin_user)]):
     return CatalogService.list_internal_solutions()
 
 
 @router.post("/internal-solutions", response_model=InternalSecuritySolutionResponse)
 def create_internal_solution(
     payload: InternalSecuritySolutionPayload,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     solution = CatalogService.create_internal_solution(payload.dict())
     AuditService.log_action(
@@ -55,7 +67,7 @@ def create_internal_solution(
 def update_internal_solution(
     solution_id: int,
     payload: InternalSecuritySolutionPayload,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     previous = next(
         (item for item in CatalogService.list_internal_solutions() if item["id_solution"] == solution_id),
@@ -82,7 +94,7 @@ def update_internal_solution(
 )
 def delete_internal_solution(
     solution_id: int,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     previous = next(
         (item for item in CatalogService.list_internal_solutions() if item["id_solution"] == solution_id),
@@ -104,19 +116,19 @@ def delete_internal_solution(
 
 
 @router.get("/references", response_model=list[CatalogReferenceResponse])
-def list_references(_: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+def list_references(_: Annotated[AuthenticatedUser, Depends(get_admin_user)]):
     return CatalogService.list_references()
 
 
 @router.get("/references/groups", response_model=list[CatalogReferenceGroupResponse])
-def list_reference_groups(_: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+def list_reference_groups(_: Annotated[AuthenticatedUser, Depends(get_admin_user)]):
     return CatalogService.list_reference_groups()
 
 
 @router.post("/references", response_model=CatalogReferenceResponse)
 def create_reference(
     payload: CatalogReferencePayload,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     reference = CatalogService.create_reference(payload.dict())
     AuditService.log_action(
@@ -138,7 +150,7 @@ def create_reference(
 def update_reference(
     reference_id: int,
     payload: CatalogReferencePayload,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     previous = next(
         (item for item in CatalogService.list_references() if item["id_reference"] == reference_id),
@@ -165,7 +177,7 @@ def update_reference(
 )
 def delete_reference(
     reference_id: int,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     previous = next(
         (item for item in CatalogService.list_references() if item["id_reference"] == reference_id),
@@ -187,12 +199,12 @@ def delete_reference(
 
 
 @router.get("", response_model=list[CatalogThreatListItemResponse])
-def list_threats(_: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+def list_threats(_: Annotated[AuthenticatedUser, Depends(get_admin_user)]):
     return CatalogService.list_threats()
 
 
 @router.post("/refresh", response_model=CatalogRefreshResponse)
-def refresh_threat_catalog(current_user: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+def refresh_threat_catalog(current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)]):
     AuditService.log_action(
         actor=current_user,
         action_type="TRIGGER_CATALOG_REFRESH",
@@ -204,7 +216,7 @@ def refresh_threat_catalog(current_user: Annotated[AuthenticatedUser, Depends(ge
 
 
 @router.get("/export")
-def export_threat_catalog(_: Annotated[AuthenticatedUser, Depends(get_current_user)]):
+def export_threat_catalog(_: Annotated[AuthenticatedUser, Depends(get_admin_user)]):
     export_payload = CatalogService.export_threat_catalog()
     return StreamingResponse(
         BytesIO(export_payload["content"]),
@@ -222,7 +234,7 @@ def export_threat_catalog(_: Annotated[AuthenticatedUser, Depends(get_current_us
 )
 def get_threat(
     threat_id: int,
-    _: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    _: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     threat = CatalogService.get_threat_by_id(threat_id)
     if not threat:
@@ -233,7 +245,7 @@ def get_threat(
 @router.post("", response_model=CatalogThreatResponse)
 def create_threat(
     payload: CatalogThreatUpsertRequest,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     threat = CatalogService.create_threat(payload.dict())
     AuditService.log_action(
@@ -255,7 +267,7 @@ def create_threat(
 def update_threat(
     threat_id: int,
     payload: CatalogThreatUpsertRequest,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     previous = CatalogService.get_threat_by_id(threat_id)
     threat = CatalogService.update_threat(threat_id, payload.dict())
@@ -279,7 +291,7 @@ def update_threat(
 )
 def delete_threat(
     threat_id: int,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
 ):
     previous = CatalogService.get_threat_by_id(threat_id)
     deleted = CatalogService.delete_threat(threat_id)

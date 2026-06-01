@@ -73,8 +73,10 @@ Tu dois :
 - raisonner sur le contexte reel de l application
 - selectionner uniquement les menaces du catalogue qui sont pertinentes
 - reutiliser et adapter la description de la menace au contexte applicatif
-- generer entre 2 et 3 scenarios d attaque par menace retenue
+- generer des scenarios initiaux courts, servant de base de travail pour un enrichissement ulterieur
 - ne retenir que les menaces justifiees par le contexte applicatif
+- privilegier la precision a la quantite
+- exclure toute menace qui n a pas d ancrage clair dans les composants, flux, donnees, expositions ou dependances reelles de l application
 
 Regles strictes :
 - repondre uniquement en JSON
@@ -82,7 +84,65 @@ Regles strictes :
 - ne jamais inventer une menace absente du catalogue
 - ne pas renvoyer tout le catalogue, seulement les menaces pertinentes
 - chaque menace doit contenir un nom, une description contextualisee et une liste attack_scenarios
+- la description doit expliquer pourquoi la menace est plausible dans cette application, sans rester generique
 - attack_scenarios doit contenir entre 2 et 3 phrases claires en francais
+- a cette etape, chaque scenario doit rester concis, credible et directement relie au contexte applicatif
+- ne pas chercher a etre exhaustif ni excessivement technique a cette etape
+- ne pas inclure de mitigations a cette etape
+- ne pas ajouter de champ impact
+- si une menace du catalogue est seulement vaguement reliee au contexte, il faut l exclure
+- ne jamais utiliser de formulation vide du type "un attaquant compromet le systeme" sans mecanisme concret
+
+Structure obligatoire :
+{
+  "threats": [
+    {
+      "name": "",
+      "description": "",
+      "attack_scenarios": [""]
+    }
+  ]
+}
+"""
+
+
+SCENARIO_ENRICHMENT_PROMPT = """
+Tu es un expert senior en threat modeling applicatif et architectural.
+
+Mission :
+Analyser l architecture de l application a partir :
+- du nom de l application
+- de la description consolidee de l application
+- du contexte extrait du questionnaire
+- des indications techniques de diagramme
+- d une liste de menaces deja retenues
+- des scenarios d attaque deja associes a ces menaces en base de donnees
+- d un contexte CVE extrait quand il est fourni
+
+Tu dois :
+- conserver strictement les menaces deja retenues
+- conserver la coherence entre chaque menace et sa description
+- t appuyer sur les scenarios existants comme base de travail
+- utiliser le contexte CVE uniquement pour renforcer les scenarios
+- produire des scenarios plus connectes a l architecture reelle, plus concrets, plus techniques et plus plausibles
+- integrer implicitement les mecanismes d exploitation decrits dans les CVE lorsque cela eclaire la menace, sans transformer la reponse en liste de CVE
+- eviter les scenarios generiques, abstraits ou hors contexte
+- expliciter le point d entree, le composant vise, la condition d exploitation et l effet recherche quand ces elements sont deducibles du contexte
+- t appuyer sur les descriptions CVE pour reutiliser des mecanismes d attaque realistes, mais sans copier textuellement ni citer des CVE dans chaque phrase
+- produire une logique d attaque progressive et credible, pas une suite de slogans de securite
+
+Regles strictes :
+- repondre uniquement en JSON
+- aucun texte hors JSON
+- ne jamais ajouter une nouvelle menace
+- chaque menace doit contenir un nom, une description et une liste attack_scenarios
+- les champs name et description doivent rester coherents avec les menaces deja retenues
+- attack_scenarios doit contenir entre 2 et 4 phrases claires en francais
+- chaque scenario doit decrire une logique d attaque credible dans le contexte reel de l application
+- chaque scenario doit etre plus fort que la version initiale sur au moins un axe : precision technique, logique d enchainement, ancrage dans les composants ou realisme d exploitation
+- si le contexte CVE n apporte rien d utile a une menace, ne pas forcer artificiellement un scenario pseudo-technique
+- ne pas inventer de composants, de flux, de versions ou de failles absentes du contexte
+- ne pas transformer les scenarios en phrases trop longues, confuses ou encyclopediques
 - ne pas inclure de mitigations a cette etape
 - ne pas ajouter de champ impact
 
@@ -120,6 +180,8 @@ Tu dois :
 - completer avec des mitigations supplementaires seulement si une mitigation importante manque dans le catalogue pour couvrir correctement le contexte
 - ne proposer que des mitigations concretes, exploitables, fortes et pertinentes pour un contexte critique
 - prioriser les mitigations les plus exigeantes et les plus critiques lorsque le contexte applicatif est critique
+- relier implicitement chaque mitigation au mecanisme d attaque decrit dans les scenarios
+- privilegier les mesures techniques actionnables plutot que les recommandations vagues de gouvernance
 
 Regles strictes :
 - repondre uniquement en JSON
@@ -133,6 +195,8 @@ Regles strictes :
 - fusionner les mitigations proches au lieu de les dupliquer
 - supprimer toute mitigation generique, faible, hors sujet ou deja couverte par une autre mitigation plus forte
 - chaque mitigation doit etre justifiee par le contexte, l architecture, les flux, les donnees ou les dependances de l application
+- ne pas produire de controles triviaux ou tautologiques du type "securiser le systeme" ou "mettre de la securite"
+- lorsqu une mitigation est deja couverte par une autre plus precise, ne garder que la plus precise
 - pour un contexte critique, viser une sortie dense et utile avec seulement les mitigations les plus exigeantes et prioritaires
 - limiter le nombre total de menaces retenues au strict necessaire ; pour un contexte critique, ne jamais depasser 40 a 50 menaces et seulement si elles sont reellement justifiees
 

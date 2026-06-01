@@ -36,6 +36,7 @@ import {
 import keycloak from '../../auth/keycloak';
 import { CveGraphExplorer } from '../../components/CveGraphExplorer';
 import { Navbar } from '../../components/Navbar';
+import { pushBrowserPath } from '../../utils/navigation';
 import {
   showConfirmAlert,
   showErrorAlert,
@@ -70,6 +71,31 @@ interface AdminPageProps {
   onLogout: () => void;
 }
 
+function parseAdminPath(pathname: string): AdminSection {
+  const segments = pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  if (segments[0] !== 'admin') {
+    return 'dashboard';
+  }
+
+  const candidate = segments[1];
+  if (
+    candidate === 'catalog' ||
+    candidate === 'questionnaire' ||
+    candidate === 'references' ||
+    candidate === 'internal_solutions' ||
+    candidate === 'cve_graph' ||
+    candidate === 'traceability'
+  ) {
+    return candidate;
+  }
+
+  return 'dashboard';
+}
+
+function buildAdminPath(section: AdminSection): string {
+  return `/admin/${section}`;
+}
+
 type EditableStep = Omit<QuestionnaireStep, 'questions'> & {
   questions: Question[];
 };
@@ -98,6 +124,60 @@ interface EditableInternalSolutionForm {
   description_solution: string;
   actif: boolean;
 }
+
+const INTERNAL_SOLUTION_TYPE_OPTIONS = [
+  '',
+  'WAF',
+  'EDR',
+  'SIEM',
+  'SOAR',
+  'IAM',
+  'PAM',
+  'DLP',
+  'CASB',
+  'SAST',
+  'DAST',
+  'NDR',
+  'IDS/IPS',
+  'PROXY',
+  'FIREWALL',
+  'SEGMENTATION RESEAU',
+  'CHIFFREMENT',
+  'GESTION DES VULNERABILITES',
+  'SAUVEGARDE',
+  'AUTRE',
+];
+
+const INTERNAL_SOLUTION_EDITOR_SUGGESTIONS = [
+  'Microsoft',
+  'Palo Alto Networks',
+  'Fortinet',
+  'Cisco',
+  'CrowdStrike',
+  'Splunk',
+  'IBM',
+  'Check Point',
+  'Trend Micro',
+  'SentinelOne',
+  'Proofpoint',
+  'Zscaler',
+  'Okta',
+  'CyberArk',
+  'F5',
+];
+
+const INTERNAL_SOLUTION_USAGE_SUGGESTIONS = [
+  'Protection endpoint',
+  'Supervision securite',
+  'Gestion des identites',
+  'Protection reseau',
+  'Protection applicative',
+  'Detection et reponse',
+  'Protection des donnees',
+  'Gestion des acces privilegies',
+  'Conformite et audit',
+  'Vulnerability management',
+];
 
 function buildAuthHeaders(contentType = false): HeadersInit {
   const headers: HeadersInit = {};
@@ -565,6 +645,23 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
   const [isSavingCatalogThreat, setIsSavingCatalogThreat] = useState(false);
   const [isExportingCatalog, setIsExportingCatalog] = useState(false);
   const [catalogStatusMessage, setCatalogStatusMessage] = useState('');
+
+  useEffect(() => {
+    const syncFromLocation = () => {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      setActiveSection(parseAdminPath(window.location.pathname));
+    };
+
+    syncFromLocation();
+    window.addEventListener('popstate', syncFromLocation);
+    return () => window.removeEventListener('popstate', syncFromLocation);
+  }, []);
+
+  useEffect(() => {
+    pushBrowserPath(buildAdminPath(activeSection));
+  }, [activeSection]);
   const [errorMessage, setErrorMessage] = useState('');
 
   const refreshQuestionnaires = async (preferredQuestionnaireId?: number | null) => {
@@ -925,6 +1022,57 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
       uniqueCategories,
     };
   }, [internalSecuritySolutions]);
+
+  const internalSolutionNameSuggestions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          internalSecuritySolutions
+            .map((solution) => solution.nom_solution.trim())
+            .filter(Boolean)
+            .sort((left, right) => left.localeCompare(right, 'fr'))
+        )
+      ),
+    [internalSecuritySolutions]
+  );
+
+  const internalSolutionEditorSuggestions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...INTERNAL_SOLUTION_EDITOR_SUGGESTIONS, ...internalSecuritySolutions.map((solution) => solution.editeur_solution?.trim() || '')]
+            .filter(Boolean)
+            .sort((left, right) => left.localeCompare(right, 'fr'))
+        )
+      ),
+    [internalSecuritySolutions]
+  );
+
+  const internalSolutionUsageSuggestions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...INTERNAL_SOLUTION_USAGE_SUGGESTIONS, ...internalSecuritySolutions.map((solution) => solution.usage_securite?.trim() || '')]
+            .filter(Boolean)
+            .sort((left, right) => left.localeCompare(right, 'fr'))
+        )
+      ),
+    [internalSecuritySolutions]
+  );
+
+  const internalSolutionTypeOptions = useMemo(
+    () =>
+      [
+        '',
+        ...Array.from(
+          new Set(
+            [...INTERNAL_SOLUTION_TYPE_OPTIONS, ...internalSecuritySolutions.map((solution) => solution.type_solution.trim()), internalSolutionForm.type_solution.trim()]
+              .filter(Boolean)
+          )
+        ),
+      ],
+    [internalSecuritySolutions, internalSolutionForm.type_solution]
+  );
 
   const threatNotifications = useMemo(() => {
     const unreadCount = newThreatNotifications.length;
@@ -1508,7 +1656,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
       setErrorMessage('');
       const payload = {
         nom_solution: internalSolutionForm.nom_solution.trim(),
-        type_solution: internalSolutionForm.type_solution.trim(),
+        type_solution: internalSolutionForm.type_solution.trim().toUpperCase(),
         editeur_solution: internalSolutionForm.editeur_solution.trim() || null,
         usage_securite: internalSolutionForm.usage_securite.trim() || null,
         description_solution: internalSolutionForm.description_solution.trim() || null,
@@ -3297,40 +3445,48 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
                 </div>
 
                 <div className="space-y-4">
-                  <Field
+                  <SuggestField
                     label="Nom de la solution"
                     value={internalSolutionForm.nom_solution}
                     onChange={(value) =>
                       setInternalSolutionForm((previous) => ({ ...previous, nom_solution: value }))
                     }
+                    suggestions={internalSolutionNameSuggestions}
+                    placeholder="Ex. Microsoft Defender for Endpoint"
                   />
                   <Field
                     label="Type"
                     value={internalSolutionForm.type_solution}
+                    options={internalSolutionTypeOptions}
                     onChange={(value) =>
                       setInternalSolutionForm((previous) => ({ ...previous, type_solution: value }))
                     }
                   />
-                  <Field
+                  <SuggestField
                     label="Éditeur"
                     value={internalSolutionForm.editeur_solution}
                     onChange={(value) =>
                       setInternalSolutionForm((previous) => ({ ...previous, editeur_solution: value }))
                     }
+                    suggestions={internalSolutionEditorSuggestions}
+                    placeholder="Ex. Microsoft"
                   />
-                  <Field
+                  <SuggestField
                     label="Usage sécurité"
                     value={internalSolutionForm.usage_securite}
                     onChange={(value) =>
                       setInternalSolutionForm((previous) => ({ ...previous, usage_securite: value }))
                     }
+                    suggestions={internalSolutionUsageSuggestions}
+                    placeholder="Ex. Detection et reponse"
                   />
-                  <Field
+                  <TextAreaField
                     label="Description"
                     value={internalSolutionForm.description_solution}
                     onChange={(value) =>
                       setInternalSolutionForm((previous) => ({ ...previous, description_solution: value }))
                     }
+                    rows={4}
                   />
 
                   <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -3906,7 +4062,7 @@ function Field({
         >
           {options.map((option) => (
             <option key={option} value={option}>
-              {option}
+              {option || 'Selectionner une valeur'}
             </option>
           ))}
         </select>
@@ -3918,6 +4074,45 @@ function Field({
           className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-orange-400 focus:outline-none disabled:bg-slate-50"
         />
       )}
+    </label>
+  );
+}
+
+function SuggestField({
+  label,
+  value,
+  onChange,
+  suggestions,
+  placeholder,
+}: Readonly<{
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  suggestions: string[];
+  placeholder?: string;
+}>) {
+  const datalistId = `suggest-${label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')}`;
+
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      <input
+        list={datalistId}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-orange-400 focus:outline-none"
+      />
+      <datalist id={datalistId}>
+        {suggestions.map((suggestion) => (
+          <option key={suggestion} value={suggestion} />
+        ))}
+      </datalist>
     </label>
   );
 }

@@ -465,6 +465,7 @@
     <div class="toc-row">4 <a class="toc-link" href="#modelisation">Modelisation des Menaces</a></div>
     <div class="toc-row">a. <a class="toc-link" href="#schema-menaces">Schema de Modelisation des Menaces</a></div>
     <div class="toc-row">b. <a class="toc-link" href="#identification-menaces">Identification des Menaces</a></div>
+    <div class="toc-row">c. <a class="toc-link" href="#exposition-cve">Exposition CVE</a></div>
     <div class="toc-row">5 <a class="toc-link" href="#synthese-exigences">Synthese Des Exigences Techniques</a></div>
   </div>
 </section>
@@ -497,7 +498,7 @@
 
 <section class="page inner" id="modelisation">
   <h1>Modelisation des Menaces</h1>
-  <p>La modelisation des menaces a ete realisee en se basant sur l architecture technique de l environnement cible, et selon une combinaison de methodologies reconnues de Threat Modelling, a savoir : STRIDE, PASTA et DREAD.</p>
+  <p>{{ threat_modeling_methodology_text }}</p>
   <h2 id="schema-menaces">a. Schema de Modelisation des Menaces</h2>
   <div class="schema-box">
     {% if dfd_image %}
@@ -510,7 +511,7 @@
 
 <section class="page inner">
   <h2 id="identification-menaces">b. Identification des Menaces</h2>
-  <p>L identification des menaces a ete realisee sur la base du modele STRIDE, et du referentiel CAPEC de MITRE. Les menaces identifiees sont reparties sur six categories conformement aux recommandations.</p>
+  <p>{{ threat_identification_text }}</p>
   <table>
     <thead>
       <tr>
@@ -571,6 +572,33 @@
       {% endif %}
     </tbody>
   </table>
+</section>
+
+<section class="page inner">
+  <h2 id="exposition-cve">c. Exposition CVE</h2>
+  <p>{{ cve_exposure_summary }}</p>
+  {% if cve_reference_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th style="width:22%">Reference CVE</th>
+        <th style="width:38%">Source</th>
+        <th>Lien</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ref in cve_reference_rows %}
+      <tr>
+        <td>{{ ref.code }}</td>
+        <td>{{ ref.name }}</td>
+        <td>{{ ref.link or 'Non renseigne' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>Aucune reference CVE explicite n a ete materialisee dans cette version du rapport.</p>
+  {% endif %}
 </section>
 
 <section class="page inner" id="synthese-exigences">

@@ -1,6 +1,7 @@
 import json
 import logging
 from pathlib import Path
+import uuid
 
 from app.core.auth import AuthenticatedUser
 from app.core.exceptions import AnalysisStepError
@@ -8,6 +9,7 @@ from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.questionnaire_repository import QuestionnaireRepository
 from app.services.audit_service import AuditService
+from app.services.cve_enrichment_service import CveEnrichmentService
 from app.services.dfd_generator import generate_dfd_with_pytm
 from app.services.llm_feedback_service import LlmFeedbackService
 from app.services.llm_clients import (
@@ -20,6 +22,7 @@ from app.services.llm_clients import (
 from app.services.prompts import (
     APPLICATION_DESCRIPTION_PROMPT,
     DFD_SYSTEM_PROMPT,
+    SCENARIO_ENRICHMENT_PROMPT,
     THREAT_MITIGATION_PROMPT,
     THREAT_SELECTION_PROMPT,
 )
@@ -32,6 +35,8 @@ logger = logging.getLogger(__name__)
 class AnalysisService:
     _latest_report_path: str | None = None
     _latest_dfd_path: str | None = None
+    _latest_report_owner_id: uuid.UUID | None = None
+    _latest_dfd_owner_id: uuid.UUID | None = None
 
     @staticmethod
     def _normalize_answer_candidates(answer_row: dict) -> list[str]:
@@ -174,6 +179,38 @@ class AnalysisService:
         return extract_json_object(call_mistral(prompt))
 
     @staticmethod
+    def _build_cve_context_text(context_bundle: dict) -> str:
+        sections: list[str] = []
+
+        detected_terms = context_bundle.get("cve_detected_terms") or []
+        if detected_terms:
+            sections.append(
+                "Technologies detectees pour le contexte CVE : "
+                + ", ".join(str(term) for term in detected_terms[:8])
+                + "."
+            )
+
+        summary = str(context_bundle.get("cve_summary") or "").strip()
+        if summary:
+            sections.append(f"Resume CVE : {summary}")
+
+        risk_signals = context_bundle.get("cve_risk_signals") or []
+        if risk_signals:
+            sections.append("Signaux de risque a prendre en compte :")
+            sections.extend(f"- {signal}" for signal in risk_signals[:5])
+
+        graph_relation_summary = str(context_bundle.get("cve_graph_relation_summary") or "").strip()
+        if graph_relation_summary:
+            sections.append(graph_relation_summary)
+
+        cve_context = str(context_bundle.get("cve_context_text") or "").strip()
+        if cve_context:
+            sections.append(cve_context)
+
+        prompt_text = "\n".join(section for section in sections if section).strip()
+        return f"\n\n{prompt_text}\n" if prompt_text else ""
+
+    @staticmethod
     def _build_catalog_selection_payload(catalog_threats: list[dict]) -> list[dict]:
         lightweight_catalog: list[dict] = []
         for threat in catalog_threats:
@@ -229,6 +266,45 @@ class AnalysisService:
         return payload
 
     @staticmethod
+    def _build_scenario_enrichment_payload(
+        selected_threats: list[dict],
+        catalog_threats: list[dict],
+    ) -> list[dict]:
+        catalog_by_name = {
+            str(threat.get("nom_menace") or threat.get("name") or "").strip().casefold(): threat
+            for threat in catalog_threats
+            if str(threat.get("nom_menace") or threat.get("name") or "").strip()
+        }
+
+        payload: list[dict] = []
+        for selected_threat in selected_threats:
+            threat_name = str(selected_threat.get("name") or "").strip()
+            if not threat_name:
+                continue
+
+            catalog_match = catalog_by_name.get(threat_name.casefold(), {})
+            db_scenarios = []
+            for scenario in catalog_match.get("scenarios", []) or []:
+                scenario_text = str(scenario.get("description_scenario") or "").strip()
+                if scenario_text:
+                    db_scenarios.append(scenario_text)
+
+            payload.append(
+                {
+                    "name": threat_name,
+                    "description": str(
+                        selected_threat.get("description")
+                        or catalog_match.get("description")
+                        or ""
+                    ).strip(),
+                    "existing_attack_scenarios": db_scenarios,
+                    "current_attack_scenarios": selected_threat.get("attack_scenarios") or [],
+                }
+            )
+
+        return payload
+
+    @staticmethod
     def _select_catalog_threats(
         app_name: str,
         generated_description: str,
@@ -246,6 +322,34 @@ class AnalysisService:
             f"{feedback_memory}\n\n"
             f"Catalogue de menaces disponible :\n"
             f"{json.dumps(lightweight_catalog, ensure_ascii=False, indent=2)}\n"
+        )
+        return extract_json_object(call_gemini(prompt))
+
+    @staticmethod
+    def _enrich_attack_scenarios(
+        app_name: str,
+        generated_description: str,
+        context_bundle: dict,
+        selected_threats_payload: list[dict],
+    ) -> dict:
+        threat_names = [
+            str(item.get("name") or "").strip()
+            for item in selected_threats_payload
+            if str(item.get("name") or "").strip()
+        ]
+        feedback_memory = LlmFeedbackService.build_prompt_memory(
+            section_types=["threat", "attack_scenario"],
+            threat_names=threat_names,
+        )
+        prompt = (
+            f"{SCENARIO_ENRICHMENT_PROMPT}\n\n"
+            f"Nom de l application :\n{app_name}\n\n"
+            f"Description consolidee :\n{generated_description}\n\n"
+            f"{context_bundle['context_text']}\n\n"
+            f"{AnalysisService._build_cve_context_text(context_bundle)}"
+            f"{feedback_memory}\n\n"
+            f"Menaces retenues et scenarios existants :\n"
+            f"{json.dumps(selected_threats_payload, ensure_ascii=False, indent=2)}\n"
         )
         return extract_json_object(call_gemini(prompt))
 
@@ -293,6 +397,28 @@ class AnalysisService:
             if isinstance(mitigations, str):
                 mitigations = [mitigations]
 
+            references = raw_threat.get("references", [])
+            normalized_references = []
+            if isinstance(references, list):
+                for reference in references:
+                    if not isinstance(reference, dict):
+                        continue
+
+                    reference_code = str(reference.get("reference_menace") or "").strip()
+                    reference_name = str(reference.get("nom_reference") or "").strip()
+                    reference_link = str(reference.get("lien") or "").strip()
+
+                    if not any((reference_code, reference_name, reference_link)):
+                        continue
+
+                    normalized_references.append(
+                        {
+                            "reference_menace": reference_code,
+                            "nom_reference": reference_name,
+                            "lien": reference_link,
+                        }
+                    )
+
             normalized.append(
                 {
                     "name": name,
@@ -307,6 +433,7 @@ class AnalysisService:
                         for item in mitigations
                         if str(item).strip()
                     ],
+                    "references": normalized_references,
                 }
             )
 
@@ -419,6 +546,17 @@ class AnalysisService:
                     questionnaire_code=questionnaire_code,
                     questionnaire_data=questionnaire_data,
                 )
+                cve_enrichment = CveEnrichmentService.build_enrichment(
+                    app_name=app_name,
+                    answers=answers,
+                    app_description=app_description,
+                )
+                context_bundle["cve_context_text"] = cve_enrichment.get("context_text", "")
+                context_bundle["cve_matches"] = cve_enrichment.get("matches", [])
+                context_bundle["cve_detected_terms"] = cve_enrichment.get("detected_terms", [])
+                context_bundle["cve_risk_signals"] = cve_enrichment.get("risk_signals", [])
+                context_bundle["cve_summary"] = cve_enrichment.get("summary", "")
+                context_bundle["cve_graph_relation_summary"] = cve_enrichment.get("graph_relation_summary", "")
             except Exception as exc:
                 logger.exception("Echec construction contexte analyse")
                 raise AnalysisStepError(
@@ -477,6 +615,7 @@ class AnalysisService:
                 dfd_output_dir = Path(__file__).resolve().parents[2] / "resources" / "out" / "diagrams"
                 dfd_image_path = generate_dfd_with_pytm(dfd_json, str(dfd_output_dir))
                 AnalysisService._latest_dfd_path = dfd_image_path
+                AnalysisService._latest_dfd_owner_id = generated_by.user_id
                 logger.info("DFD genere: analysis_id=%s path=%s", analysis_id, dfd_image_path)
             except Exception as exc:
                 logger.exception("Echec rendu DFD")
@@ -499,6 +638,19 @@ class AnalysisService:
                 )
                 selected_threats = AnalysisService._normalize_selected_threats(
                     selected_threats_result
+                )
+                scenario_enrichment_payload = AnalysisService._build_scenario_enrichment_payload(
+                    selected_threats=selected_threats,
+                    catalog_threats=catalog_threats,
+                )
+                scenario_enrichment_result = AnalysisService._enrich_attack_scenarios(
+                    app_name=app_name,
+                    generated_description=generated_description,
+                    context_bundle=context_bundle,
+                    selected_threats_payload=scenario_enrichment_payload,
+                )
+                selected_threats = AnalysisService._normalize_selected_threats(
+                    scenario_enrichment_result
                 )
                 mitigation_payload = AnalysisService._build_mitigation_payload(
                     selected_threats=selected_threats,
@@ -572,6 +724,7 @@ class AnalysisService:
                 ) from exc
 
             AnalysisService._latest_report_path = report_path
+            AnalysisService._latest_report_owner_id = generated_by.user_id
             report = ReportManagementService.create_report_record(
                 app_name=app_name,
                 description=generated_description,
@@ -589,6 +742,11 @@ class AnalysisService:
                 selected_threats=selected_threats,
                 dfd_image_path=dfd_image_path,
                 dfd_reference="DFD-01",
+                file_name=report.file_name,
+                file_type=report.file_type,
+                file_size=report.file_size,
+                minio_bucket=report.minio_bucket,
+                minio_object_key=report.minio_object_key,
                 generated_by=generated_by,
             )
             logger.info(
@@ -663,3 +821,11 @@ class AnalysisService:
     @staticmethod
     def get_latest_dfd_path() -> str | None:
         return AnalysisService._latest_dfd_path
+
+    @staticmethod
+    def get_latest_report_owner_id() -> uuid.UUID | None:
+        return AnalysisService._latest_report_owner_id
+
+    @staticmethod
+    def get_latest_dfd_owner_id() -> uuid.UUID | None:
+        return AnalysisService._latest_dfd_owner_id

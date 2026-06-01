@@ -207,6 +207,17 @@ export async function regenerateReport(reportId: string): Promise<ReportRecord> 
   return normalizeReportRecord(report);
 }
 
+export async function deleteReport(reportId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/reports/${reportId}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+  });
+
+  if (!response.ok) {
+    await parseResponse(response);
+  }
+}
+
 export async function fetchReportBlobUrl(reportUrl: string): Promise<string> {
   const response = await fetch(reportUrl, {
     method: 'GET',

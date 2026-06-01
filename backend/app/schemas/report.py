@@ -82,16 +82,34 @@ class EditableThreat(BaseModel):
     mitigations: list[str] = Field(default_factory=list)
 
 
+class ReportResultVersionResponse(BaseModel):
+    version_number: int
+    version_label: str
+    app_name: str
+    developer_name: str
+    application_description: str
+    selected_threats: list[EditableThreat] = Field(default_factory=list)
+    dfd_image_path: str | None = None
+    dfd_reference: str | None = None
+    download_url: str | None = None
+    created_by_username: str | None = None
+    created_by_email: str | None = None
+    change_reason: str | None = None
+    created_at: datetime
+
+
 class ReportResultsResponse(BaseModel):
     report_id: str
     app_name: str
     developer_name: str
     application_description: str
+    version_number: int
     application_version: str
     selected_threats: list[EditableThreat] = Field(default_factory=list)
     dfd_image_path: str | None = None
     dfd_reference: str | None = None
     updated_at: datetime | None = None
+    version_history: list[ReportResultVersionResponse] = Field(default_factory=list)
 
 
 class ReportResultsUpdateRequest(BaseModel):
@@ -135,6 +153,10 @@ class ManagerDashboardMetricsResponse(BaseModel):
     total_reports: int
     approved_reports: int
     approval_rate: float
+    global_approved_reports: int
+    global_approval_rate: float
+    my_approved_reports: int
+    my_approval_rate: float
     average_validation_time_hours: float | None = None
     reports_by_month: list[ReportsByMonthEntry] = Field(default_factory=list)
     most_frequent_threats: list[ThreatFrequencyEntry] = Field(default_factory=list)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   ChevronRight,
   Expand,
@@ -23,6 +23,17 @@ type ChatMessage = {
   content: string;
 };
 
+type FloatingPosition = {
+  x: number;
+  y: number;
+};
+
+type DragState = {
+  pointerId: number;
+  offsetX: number;
+  offsetY: number;
+};
+
 const DEFAULT_MESSAGES: ChatMessage[] = [
   {
     id: 'welcome-bot',
@@ -37,6 +48,29 @@ interface SecOpsChatbotProps {
   draftContext?: SecOpsChatDraftContext | null;
 }
 
+const FLOATING_MARGIN = 16;
+const CLOSED_DIMENSIONS = { width: 260, height: 72 };
+const OPEN_DIMENSIONS = { width: 430, height: 760 };
+const DRAG_THRESHOLD = 6;
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) {
+    return min;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function getViewportPosition(size: { width: number; height: number }): FloatingPosition {
+  if (typeof window === 'undefined') {
+    return { x: FLOATING_MARGIN, y: FLOATING_MARGIN };
+  }
+
+  return {
+    x: Math.max(window.innerWidth - size.width - FLOATING_MARGIN, FLOATING_MARGIN),
+    y: Math.max(window.innerHeight - size.height - FLOATING_MARGIN, FLOATING_MARGIN),
+  };
+}
+
 export function SecOpsChatbot({
   reportId,
   draftContext,
@@ -48,7 +82,12 @@ export function SecOpsChatbot({
   const [messages, setMessages] = useState<ChatMessage[]>(DEFAULT_MESSAGES);
   const [isSending, setIsSending] = useState(false);
   const [optionGroups, setOptionGroups] = useState<SecOpsChatActionGroup[]>([]);
+  const [position, setPosition] = useState<FloatingPosition>(() => getViewportPosition(CLOSED_DIMENSIONS));
+  const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<DragState | null>(null);
+  const dragMovedRef = useRef(false);
+  const positionRef = useRef(position);
 
   const headerSubtitle = useMemo(() => {
     if (draftContext?.active_question) {
@@ -60,6 +99,80 @@ export function SecOpsChatbot({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, isSending]);
+
+  useEffect(() => {
+    positionRef.current = position;
+  }, [position]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || isFullscreen) {
+        return;
+      }
+
+      const width = isOpen ? OPEN_DIMENSIONS.width : CLOSED_DIMENSIONS.width;
+      const height = isOpen ? Math.min(OPEN_DIMENSIONS.height, window.innerHeight - FLOATING_MARGIN * 2) : CLOSED_DIMENSIONS.height;
+      const maxX = window.innerWidth - width - FLOATING_MARGIN;
+      const maxY = window.innerHeight - height - FLOATING_MARGIN;
+      const nextX = clamp(event.clientX - dragState.offsetX, FLOATING_MARGIN, maxX);
+      const nextY = clamp(event.clientY - dragState.offsetY, FLOATING_MARGIN, maxY);
+
+      if (
+        Math.abs(nextX - positionRef.current.x) > DRAG_THRESHOLD ||
+        Math.abs(nextY - positionRef.current.y) > DRAG_THRESHOLD
+      ) {
+        dragMovedRef.current = true;
+      }
+
+      setPosition({
+        x: nextX,
+        y: nextY,
+      });
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (!dragStateRef.current || dragStateRef.current.pointerId !== event.pointerId) {
+        return;
+      }
+
+      dragStateRef.current = null;
+      setIsDragging(false);
+      window.setTimeout(() => {
+        dragMovedRef.current = false;
+      }, 0);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [isFullscreen, isOpen]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (isFullscreen) {
+        return;
+      }
+
+      const width = isOpen ? OPEN_DIMENSIONS.width : CLOSED_DIMENSIONS.width;
+      const height = isOpen ? Math.min(OPEN_DIMENSIONS.height, window.innerHeight - FLOATING_MARGIN * 2) : CLOSED_DIMENSIONS.height;
+      const maxX = window.innerWidth - width - FLOATING_MARGIN;
+      const maxY = window.innerHeight - height - FLOATING_MARGIN;
+
+      setPosition((current) => ({
+        x: clamp(current.x, FLOATING_MARGIN, maxX),
+        y: clamp(current.y, FLOATING_MARGIN, maxY),
+      }));
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [isFullscreen, isOpen]);
 
   const requestChat = async (
     payload: {
@@ -161,6 +274,28 @@ export function SecOpsChatbot({
     setMessages(DEFAULT_MESSAGES);
   };
 
+  const handleDragStart = (
+    event: ReactPointerEvent<HTMLElement>,
+    options?: { allowInteractiveTarget?: boolean }
+  ) => {
+    if (isFullscreen) {
+      return;
+    }
+
+    const target = event.target as HTMLElement | null;
+    if (!options?.allowInteractiveTarget && target?.closest('button, input, textarea')) {
+      return;
+    }
+
+    dragMovedRef.current = false;
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - position.x,
+      offsetY: event.clientY - position.y,
+    };
+    setIsDragging(true);
+  };
+
   const closeChat = () => {
     setIsOpen(false);
     setIsFullscreen(false);
@@ -173,6 +308,12 @@ export function SecOpsChatbot({
   const shellClasses = isFullscreen
     ? 'h-[92vh] w-[min(1180px,96vw)] rounded-[34px] shadow-[0_40px_120px_rgba(15,23,42,0.28)]'
     : 'max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-[430px] rounded-[30px] shadow-[0_30px_80px_rgba(15,23,42,0.22)]';
+  const floatingStyle = !isOpen || !isFullscreen
+    ? {
+        left: `${position.x}px`,
+        top: `${position.y}px`,
+      }
+    : undefined;
 
   return (
     <div
@@ -180,9 +321,10 @@ export function SecOpsChatbot({
         isOpen
           ? isFullscreen
             ? 'inset-0 z-[90] items-center justify-center p-4 sm:p-6'
-            : 'inset-y-4 right-4 z-[70] items-start sm:right-6'
-          : 'bottom-5 right-4 z-40 items-end sm:bottom-6 sm:right-6'
+            : 'z-[70] items-start'
+          : 'z-40 items-end'
       }`}
+      style={floatingStyle}
     >
       {isOpen && isFullscreen && (
         <button
@@ -198,7 +340,12 @@ export function SecOpsChatbot({
           className={`relative flex min-h-0 flex-col overflow-hidden border border-white/70 bg-white/95 backdrop-blur-2xl ${shellClasses}`}
         >
           <div className="h-1.5 bg-gradient-to-r from-accent-primary via-orange-400 to-amber-300" />
-          <div className="relative overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.18),transparent_30%),linear-gradient(135deg,#a9362c_0%,#f25041_48%,#ffaf45_100%)] px-5 pb-5 pt-4 text-white">
+          <div
+            onPointerDown={handleDragStart}
+            className={`relative overflow-hidden bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.18),transparent_30%),linear-gradient(135deg,#a9362c_0%,#f25041_48%,#ffaf45_100%)] px-5 pb-5 pt-4 text-white ${
+              isFullscreen ? '' : 'cursor-grab active:cursor-grabbing'
+            } ${isDragging ? 'select-none' : ''}`}
+          >
             <div className="relative flex items-start justify-between gap-4">
               <div className="flex min-w-0 items-center gap-3">
                 <img src={Logoproj} alt="Application logo" className="h-12 w-12 shrink-0 object-contain" />
@@ -401,7 +548,13 @@ export function SecOpsChatbot({
       ) : (
         <button
           type="button"
-          onClick={() => setIsOpen(true)}
+          onClick={() => {
+            if (dragMovedRef.current) {
+              return;
+            }
+            setIsOpen(true);
+          }}
+          onPointerDown={(event) => handleDragStart(event, { allowInteractiveTarget: true })}
           className="group flex items-center gap-3 rounded-[28px] border border-white/80 bg-white/96 px-4 py-3 shadow-[0_18px_50px_rgba(15,23,42,0.16)] backdrop-blur-xl transition hover:-translate-y-0.5"
           aria-label="Ouvrir le chatbot AWB Guard"
         >

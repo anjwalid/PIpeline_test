@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { History, Layers3, LayoutDashboard } from 'lucide-react';
-import { Navbar } from '../../components/Navbar';
+import { Navbar, type NavbarBackAction, type NavbarNotificationCenter } from '../../components/Navbar';
 import { FormView } from '../../components/FormView';
 import { ErrorView } from '../../components/ErrorView';
 import { LoadingOverlay } from '../../components/LoadingOverlay';
@@ -12,20 +12,30 @@ import { DashboardView } from '../../components/DashboardView';
 import { SecOpsChatbot } from '../../components/SecOpsChatbot';
 import { API_BASE_URL } from '../../config';
 import {
+  deleteReport,
   fetchMyReports,
   fetchReportBlobUrl,
   toAbsoluteReportUrl,
 } from '../../api/reports';
+import { showConfirmAlert, showErrorAlert, showSuccessAlert } from '../../utils/alerts';
 import type {
   AnalysisSubmitPayload,
   ReportRecord,
   SecOpsChatDraftContext,
 } from '../../types';
 import keycloak from '../../auth/keycloak';
+import { pushBrowserPath } from '../../utils/navigation';
 
 type ViewState = 'form' | 'loading' | 'error' | 'report' | 'report_editor';
 type LoadingStep = 'starting' | 'sent' | 'processing' | 'waiting';
 type SecOpsSection = 'analysis' | 'history' | 'dashboard';
+interface ApiErrorDetail {
+  error_type?: string;
+  message?: string;
+  blocked_entity?: string;
+  guardrail_name?: string;
+}
+
 const STATUS_LABELS = {
   DRAFT: 'Brouillon',
   PENDING: 'En attente manager',
@@ -33,9 +43,108 @@ const STATUS_LABELS = {
   REJECTED: 'Rejete',
 } as const;
 
+function buildStableNotificationId(reportId: string, status: string, changedAt: string) {
+  return `${reportId}:${status}:${changedAt}`;
+}
+
+function extractApiErrorMessage(
+  detail: string | ApiErrorDetail | null | undefined,
+  fallback: string
+): string {
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+
+  if (detail && typeof detail === 'object') {
+    const message = String(detail.message || '').trim();
+    if (message) {
+      return message;
+    }
+  }
+
+  return fallback;
+}
+
+function readStoredStringArray(storageKey: string): string[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(storageKey);
+    if (!rawValue) {
+      return [];
+    }
+
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredStringArray(storageKey: string, values: string[]) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(storageKey, JSON.stringify(values));
+}
+
 interface SecOpsPageProps {
   currentUserName: string;
   onLogout: () => void;
+}
+
+function parseSecOpsPath(pathname: string): {
+  activeSection: SecOpsSection;
+  viewState: ViewState;
+  reportId: string;
+} {
+  const segments = pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  if (segments[0] !== 'secops') {
+    return { activeSection: 'dashboard', viewState: 'form', reportId: '' };
+  }
+
+  if (segments[1] === 'history') {
+    return { activeSection: 'history', viewState: 'form', reportId: '' };
+  }
+
+  if (segments[1] === 'analysis') {
+    if (segments[2] === 'report') {
+      const reportId = segments[3] ?? '';
+      const viewState = segments[4] === 'edit' ? 'report_editor' : 'report';
+      return { activeSection: 'analysis', viewState, reportId };
+    }
+
+    return { activeSection: 'analysis', viewState: 'form', reportId: '' };
+  }
+
+  return { activeSection: 'dashboard', viewState: 'form', reportId: '' };
+}
+
+function buildSecOpsPath(
+  activeSection: SecOpsSection,
+  viewState: ViewState,
+  reportId: string
+): string {
+  if (activeSection === 'dashboard') {
+    return '/secops/dashboard';
+  }
+
+  if (activeSection === 'history') {
+    return '/secops/history';
+  }
+
+  if (viewState === 'report_editor' && reportId) {
+    return `/secops/analysis/report/${reportId}/edit`;
+  }
+
+  if (viewState === 'report' && reportId) {
+    return `/secops/analysis/report/${reportId}`;
+  }
+
+  return '/secops/analysis';
 }
 
 export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPageProps>) {
@@ -51,7 +160,12 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
   const [history, setHistory] = useState<ReportRecord[]>([]);
   const [isValidating, setIsValidating] = useState(false);
   const [chatDraftContext, setChatDraftContext] = useState<SecOpsChatDraftContext | null>(null);
+  const [returnSection, setReturnSection] = useState<Extract<SecOpsSection, 'dashboard' | 'history'>>('dashboard');
+  const [notificationsReadAt, setNotificationsReadAt] = useState<string | null>(null);
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
   const currentReport = history.find((report) => report.id === currentReportId);
+  const notificationStorageKey = `awb.secops.notifications.readAt.${currentUserName}`;
+  const dismissedNotificationStorageKey = `awb.secops.notifications.dismissed.${currentUserName}`;
 
   const extractReportIdFromUrl = (url: string): string => {
     const match = /\/reports\/([^/]+)\/download/.exec(url || '');
@@ -59,9 +173,40 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
   };
 
   useEffect(() => {
+    const syncFromLocation = () => {
+      if (typeof window === 'undefined') {
+        return;
+      }
+
+      const route = parseSecOpsPath(window.location.pathname);
+      setActiveSection(route.activeSection);
+      setViewState(route.viewState);
+      setCurrentReportId(route.reportId);
+    };
+
+    syncFromLocation();
+    window.addEventListener('popstate', syncFromLocation);
+    return () => window.removeEventListener('popstate', syncFromLocation);
+  }, []);
+
+  useEffect(() => {
+    pushBrowserPath(buildSecOpsPath(activeSection, viewState, currentReportId));
+  }, [activeSection, viewState, currentReportId]);
+
+  useEffect(() => {
     checkApiConnection();
     void loadMyReports();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const storedValue = window.localStorage.getItem(notificationStorageKey);
+    setNotificationsReadAt(storedValue);
+    setDismissedNotificationIds(readStoredStringArray(dismissedNotificationStorageKey));
+  }, [dismissedNotificationStorageKey, notificationStorageKey]);
 
   const checkApiConnection = async () => {
     try {
@@ -145,7 +290,31 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.detail || `Erreur API: ${response.status} ${response.statusText}`);
+        const detail = result?.detail as string | ApiErrorDetail | undefined;
+        if (
+          response.status === 403 &&
+          detail &&
+          typeof detail === 'object' &&
+          detail.error_type === 'GUARDRAIL_BLOCKED'
+        ) {
+          await showErrorAlert(
+            'Action non autorisee',
+            extractApiErrorMessage(
+              detail,
+              "Cette demande contrevient a la strategie de protection AWB. Retirez les donnees sensibles ou les liens non autorises."
+            )
+          );
+          setViewState('form');
+          setActiveSection('analysis');
+          return;
+        }
+
+        throw new Error(
+          extractApiErrorMessage(
+            detail,
+            `Erreur API: ${response.status} ${response.statusText}`
+          )
+        );
       }
 
       if (!result.report_url) {
@@ -182,6 +351,7 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
   };
 
   const handleOpenHistoryReport = (reportId: string, url: string) => {
+    setReturnSection(activeSection === 'history' ? 'history' : 'dashboard');
     setCurrentReportId(reportId);
     setChatDraftContext(null);
     setReportUrl(toAbsoluteReportUrl(url));
@@ -212,6 +382,44 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
     void loadMyReports();
   };
 
+  const handleDeleteReport = async (reportId: string) => {
+    const targetReport = history.find((report) => report.id === reportId);
+    const confirmed = await showConfirmAlert({
+      title: 'Supprimer cette analyse ?',
+      text: 'Cette action est disponible uniquement pour les brouillons et est irreversible.',
+      confirmButtonText: 'Supprimer',
+      cancelButtonText: 'Annuler',
+      icon: 'warning',
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await deleteReport(reportId);
+      const nextHistory = history.filter((report) => report.id !== reportId);
+      setHistory(nextHistory);
+
+      if (currentReportId === reportId) {
+        setCurrentReportId('');
+        setReportUrl('');
+        setIsValidating(false);
+        setViewState('form');
+      }
+
+      await showSuccessAlert(
+        'Analyse supprimee',
+        `${targetReport?.app_name || 'Le brouillon'} a ete supprime.`
+      );
+    } catch (error) {
+      await showErrorAlert(
+        'Suppression impossible',
+        error instanceof Error ? error.message : "Impossible de supprimer l'analyse."
+      );
+    }
+  };
+
   const handleRetry = () => {
     if (formData) {
       void handleFormSubmit(formData);
@@ -219,6 +427,171 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
       handleNewAnalysis();
     }
   };
+
+  const notificationEvents = useMemo(() => {
+    return history
+      .flatMap((report) => {
+        const latestDecision = [...(report.status_history || [])]
+          .filter((entry) => entry.new_status === 'APPROVED' || entry.new_status === 'REJECTED')
+          .sort(
+            (left, right) =>
+              new Date(right.changed_at).getTime() - new Date(left.changed_at).getTime()
+          )[0];
+
+        if (!latestDecision || !latestDecision.changed_at) {
+          return [];
+        }
+
+        const isApproved = latestDecision.new_status === 'APPROVED';
+        return [
+          {
+            id: buildStableNotificationId(
+              report.id,
+              latestDecision.new_status,
+              latestDecision.changed_at
+            ),
+            changedAt: latestDecision.changed_at,
+            title: isApproved
+              ? `${report.app_name} a ete approuve`
+              : `${report.app_name} demande une correction`,
+            description: isApproved
+              ? `Validation manager par ${latestDecision.changed_by_username || 'manager'} le ${new Date(latestDecision.changed_at).toLocaleString('fr-FR')}.`
+              : `Le manager ${latestDecision.changed_by_username || ''} a rejete ce rapport. Consultez le retour pour corriger puis resoumettre.`,
+          },
+        ];
+      })
+      .sort(
+        (left, right) =>
+          new Date(right.changedAt).getTime() - new Date(left.changedAt).getTime()
+      );
+  }, [history]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const existingIds = new Set(notificationEvents.map((item) => item.id));
+    const nextDismissedIds = dismissedNotificationIds.filter((id) => existingIds.has(id));
+
+    if (nextDismissedIds.length !== dismissedNotificationIds.length) {
+      writeStoredStringArray(dismissedNotificationStorageKey, nextDismissedIds);
+      setDismissedNotificationIds(nextDismissedIds);
+    }
+  }, [dismissedNotificationIds, dismissedNotificationStorageKey, notificationEvents]);
+
+  const visibleNotificationEvents = useMemo(
+    () => notificationEvents.filter((item) => !dismissedNotificationIds.includes(item.id)),
+    [dismissedNotificationIds, notificationEvents]
+  );
+
+  const notificationCenter = useMemo<NavbarNotificationCenter | null>(() => {
+    if (visibleNotificationEvents.length === 0) {
+      return {
+        title: 'Notifications SecOps',
+        unreadCount: 0,
+        items: [],
+      };
+    }
+
+    const readAtMs = notificationsReadAt ? new Date(notificationsReadAt).getTime() : 0;
+    const unreadCount = visibleNotificationEvents.filter(
+      (item) => new Date(item.changedAt).getTime() > readAtMs
+    ).length;
+
+    return {
+      title: 'Notifications SecOps',
+      unreadCount,
+      items: visibleNotificationEvents.slice(0, 8).map((item) => ({
+        id: item.id,
+        title: item.title,
+        description: item.description,
+      })),
+      onDeleteItem: (id: string) => {
+        if (typeof window === 'undefined') {
+          return;
+        }
+
+        setDismissedNotificationIds((current) => {
+          const next = current.includes(id) ? current : [...current, id];
+          writeStoredStringArray(dismissedNotificationStorageKey, next);
+          return next;
+        });
+      },
+      onClearAll: () => {
+        if (typeof window === 'undefined') {
+          return;
+        }
+
+        const next = visibleNotificationEvents.map((item) => item.id);
+        writeStoredStringArray(dismissedNotificationStorageKey, next);
+        setDismissedNotificationIds(next);
+      },
+    };
+  }, [
+    dismissedNotificationStorageKey,
+    notificationsReadAt,
+    visibleNotificationEvents,
+  ]);
+
+  const handleNotificationOpenChange = (isOpen: boolean) => {
+    if (!isOpen || visibleNotificationEvents.length === 0 || typeof window === 'undefined') {
+      return;
+    }
+
+    const latestTimestamp = visibleNotificationEvents[0].changedAt;
+    window.localStorage.setItem(notificationStorageKey, latestTimestamp);
+    setNotificationsReadAt(latestTimestamp);
+  };
+
+  const backAction = useMemo<NavbarBackAction | null>(() => {
+    if (activeSection === 'history') {
+      return {
+        label: 'Retour dashboard',
+        onClick: () => setActiveSection('dashboard'),
+      };
+    }
+
+    if (activeSection !== 'analysis') {
+      return null;
+    }
+
+    if (viewState === 'error' || viewState === 'loading') {
+      return {
+        label: 'Retour analyse',
+        onClick: () => setViewState('form'),
+      };
+    }
+
+    if (viewState === 'report_editor') {
+      return {
+        label: 'Retour rapport',
+        onClick: () => setViewState(reportUrl ? 'report' : 'form'),
+      };
+    }
+
+    if (viewState === 'report') {
+      return {
+        label: isValidating
+          ? 'Retour analyse'
+          : returnSection === 'history'
+            ? 'Retour historique'
+            : 'Retour dashboard',
+        onClick: () => {
+          if (isValidating) {
+            setViewState('form');
+            return;
+          }
+          setActiveSection(returnSection);
+        },
+      };
+    }
+
+    return {
+      label: 'Retour dashboard',
+      onClick: () => setActiveSection('dashboard'),
+    };
+  }, [activeSection, isValidating, reportUrl, returnSection, viewState]);
 
   let content: ReactNode;
 
@@ -239,6 +612,7 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
         history={history}
         onOpenReport={handleOpenHistoryReport}
         onEditReport={(reportId: string) => handleOpenReportEditor(reportId)}
+        onDeleteReport={(reportId: string) => void handleDeleteReport(reportId)}
         onNewAnalysis={handleNewAnalysis}
       />
     );
@@ -292,6 +666,7 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
               }
               managerName={currentReport?.validated_by_username ?? null}
               statusLabel={currentReport ? STATUS_LABELS[currentReport.status] : null}
+              report={currentReport ?? null}
             />
           ))}
 
@@ -299,6 +674,7 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
           <ReportResultsEditor
             reportId={currentReportId}
             currentStatus={currentReport?.status ?? 'DRAFT'}
+            report={currentReport ?? null}
             validatedAt={currentReport?.validated_at ?? null}
             onBack={() => {
               setViewState(reportUrl ? 'report' : 'form');
@@ -324,6 +700,9 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
           { key: 'analysis', label: 'Nouvelle analyse', icon: Layers3 },
           { key: 'history', label: 'Historique', icon: History },
         ]}
+        notificationCenter={notificationCenter}
+        onNotificationOpenChange={handleNotificationOpenChange}
+        backAction={backAction}
       />
 
       {viewState === 'loading' && <LoadingOverlay step={loadingStep} />}

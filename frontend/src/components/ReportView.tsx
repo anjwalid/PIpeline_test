@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 
-import { fetchReportBlobUrl, fetchReportResults } from '../api/reports';
-import type { CatalogReference, ReportResultsRecord } from '../types';
+import { fetchReportBlobUrl, fetchReportResults, toAbsoluteReportUrl } from '../api/reports';
+import { ReportVersionHistory } from './ReportVersionHistory';
+import type { CatalogReference, ReportRecord, ReportResultsRecord } from '../types';
 
 interface ReportViewProps {
   reportId?: string;
@@ -11,6 +13,7 @@ interface ReportViewProps {
   canEditResults?: boolean;
   managerName?: string | null;
   statusLabel?: string | null;
+  report?: ReportRecord | null;
 }
 
 export function ReportView({
@@ -21,10 +24,18 @@ export function ReportView({
   canEditResults = true,
   managerName,
   statusLabel,
+  report,
 }: Readonly<ReportViewProps>) {
   const [blobUrl, setBlobUrl] = useState('');
   const [loadingError, setLoadingError] = useState('');
   const [reportResults, setReportResults] = useState<ReportResultsRecord | null>(null);
+  const [selectedVersionNumber, setSelectedVersionNumber] = useState<number | null>(null);
+  const [displayReportUrl, setDisplayReportUrl] = useState(reportUrl);
+  const [isPdfLoading, setIsPdfLoading] = useState(false);
+
+  useEffect(() => {
+    setDisplayReportUrl(reportUrl);
+  }, [reportUrl]);
 
   useEffect(() => {
     let currentBlobUrl = '';
@@ -34,8 +45,9 @@ export function ReportView({
       try {
         setLoadingError('');
         setBlobUrl('');
+        setIsPdfLoading(true);
 
-        const nextBlobUrl = await fetchReportBlobUrl(reportUrl);
+        const nextBlobUrl = await fetchReportBlobUrl(displayReportUrl);
         currentBlobUrl = nextBlobUrl;
 
         if (!cancelled) {
@@ -47,10 +59,14 @@ export function ReportView({
             error instanceof Error ? error.message : 'Erreur chargement rapport.'
           );
         }
+      } finally {
+        if (!cancelled) {
+          setIsPdfLoading(false);
+        }
       }
     };
 
-    if (reportUrl) {
+    if (displayReportUrl) {
       void loadReport();
     }
 
@@ -60,7 +76,7 @@ export function ReportView({
         URL.revokeObjectURL(currentBlobUrl);
       }
     };
-  }, [reportUrl]);
+  }, [displayReportUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +105,32 @@ export function ReportView({
       cancelled = true;
     };
   }, [reportId]);
+
+  useEffect(() => {
+    setSelectedVersionNumber(null);
+  }, [reportId]);
+
+  const selectedVersion = useMemo(() => {
+    if (!reportResults) {
+      return null;
+    }
+
+    return (
+      reportResults.version_history.find(
+        (version) => version.version_number === (selectedVersionNumber ?? reportResults.version_number)
+      ) ?? reportResults.version_history[0] ?? null
+    );
+  }, [reportResults, selectedVersionNumber]);
+
+  const resolveVersionDownloadUrl = (versionNumber: number, explicitUrl?: string | null) => {
+    if (explicitUrl) {
+      return toAbsoluteReportUrl(explicitUrl);
+    }
+    if (!reportId) {
+      return reportUrl;
+    }
+    return toAbsoluteReportUrl(`/reports/${reportId}/versions/${versionNumber}/download`);
+  };
 
   const cveReferences = collectCveReferences(reportResults);
   const cveSummary = buildCveSummary(reportResults, cveReferences.length);
@@ -139,6 +181,10 @@ export function ReportView({
         </div>
       </div>
 
+      {report?.status === 'REJECTED' && (
+        <RejectedFeedbackPanel report={report} />
+      )}
+
       {reportResults && (
         <div className="mb-6 rounded-2xl border border-orange-100 bg-[linear-gradient(135deg,#fff8f1,#fffdfb)] p-5 shadow-[0_12px_30px_rgba(249,115,22,0.08)]">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -185,8 +231,29 @@ export function ReportView({
         </div>
       )}
 
+      {reportResults && (
+        <div className="mb-6">
+          <ReportVersionHistory
+            versions={reportResults.version_history}
+            currentVersionNumber={reportResults.version_number}
+            selectedVersionNumber={selectedVersion?.version_number ?? null}
+            onSelectVersion={(version) => {
+              setSelectedVersionNumber(version.version_number);
+              setDisplayReportUrl(
+                resolveVersionDownloadUrl(version.version_number, version.download_url)
+              );
+            }}
+          />
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl overflow-hidden border border-border-subtle h-[80vh] shadow-[0_18px_50px_rgba(217,119,6,0.14)]">
-        {blobUrl ? (
+        {isPdfLoading ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-text-secondary">
+            <RefreshCw className="h-8 w-8 animate-spin text-accent-primary" />
+            <p className="text-sm font-medium">Chargement du rapport de cette version...</p>
+          </div>
+        ) : blobUrl ? (
           <iframe title="Rapport analyse" src={blobUrl} className="w-full h-full" />
         ) : (
           <div className="p-8 text-text-secondary">
@@ -194,6 +261,66 @@ export function ReportView({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function RejectedFeedbackPanel({ report }: Readonly<{ report: ReportRecord }>) {
+  const latestComment = report.status_history.find((entry) => Boolean(entry.comment))?.comment;
+  const rejectionFeedback = report.manager_feedback.filter((entry) => entry.decision_type === 'REJECTED');
+  const normalizedLatestComment = (latestComment || '').trim();
+
+  if (!latestComment && rejectionFeedback.length === 0 && report.annotations.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mb-6 rounded-2xl border border-red-200 bg-[linear-gradient(135deg,#fff5f5,#fffdfd)] p-5 shadow-[0_12px_30px_rgba(239,68,68,0.08)]">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-red-600">
+        Feedback manager
+      </p>
+
+      {latestComment && (
+        <div className="mt-3 rounded-xl border border-red-100 bg-white px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Dernier commentaire
+          </p>
+          <p className="mt-1 text-sm leading-6 text-slate-700">{latestComment}</p>
+        </div>
+      )}
+
+      {rejectionFeedback.length > 0 && (
+        <div className="mt-4 rounded-xl border border-red-100 bg-white px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Motifs de rejet
+          </p>
+          <ul className="mt-2 space-y-2">
+            {rejectionFeedback.map((entry) => (
+              <li key={entry.id} className="text-sm text-slate-700">
+                <span className="font-semibold">{entry.reason_code}</span>
+                {entry.comment && entry.comment.trim() !== normalizedLatestComment
+                  ? ` - ${entry.comment}`
+                  : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {report.annotations.length > 0 && (
+        <div className="mt-4 rounded-xl border border-red-100 bg-white px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Annotations
+          </p>
+          <ul className="mt-2 space-y-2">
+            {report.annotations.map((annotation) => (
+              <li key={annotation.id} className="text-sm text-slate-700">
+                {annotation.annotation}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Response, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.auth import AuthenticatedUser, get_current_user
@@ -37,6 +37,15 @@ def get_manager_dashboard_metrics(
 @router.get("/{report_id}", response_model=ReportResponse)
 def get_report(report_id: str, current_user: Annotated[AuthenticatedUser, Depends(get_current_user)]):
     return ReportManagementService.get_report(report_id, current_user)
+
+
+@router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_report(
+    report_id: str,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    ReportManagementService.delete_report(report_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/{report_id}/status", response_model=ReportResponse)
@@ -125,6 +134,51 @@ def download_report(
     def iterator():
         try:
             # MinIO python client returns an urllib3 HTTPResponse.
+            for chunk in object_response.stream(64 * 1024):
+                if not chunk:
+                    continue
+                yield chunk
+        finally:
+            try:
+                object_response.close()
+            finally:
+                if hasattr(object_response, "release_conn"):
+                    object_response.release_conn()
+
+    return StreamingResponse(
+        iterator(),
+        media_type=report["file_type"],
+        headers={
+            "Content-Disposition": f'inline; filename="{report["file_name"]}"',
+        },
+    )
+
+
+@router.get("/{report_id}/versions/{version_number}/download", include_in_schema=False)
+def download_report_version(
+    report_id: str,
+    version_number: int,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    payload = ReportManagementService.get_version_download_payload(
+        report_id,
+        version_number,
+        current_user,
+    )
+    report = payload["report"]
+    local_path = payload.get("local_path")
+    object_response = payload["object_response"]
+
+    if local_path:
+        return FileResponse(
+            path=local_path,
+            media_type=report["file_type"],
+            filename=report["file_name"],
+            headers={"Content-Disposition": "inline"},
+        )
+
+    def iterator():
+        try:
             for chunk in object_response.stream(64 * 1024):
                 if not chunk:
                     continue

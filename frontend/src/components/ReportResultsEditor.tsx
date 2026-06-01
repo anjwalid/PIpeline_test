@@ -15,6 +15,7 @@ import {
 } from '../utils/alerts';
 import type {
   EditableThreat,
+  ReportRecord,
   ReportResultsPayload,
   ReportStatus,
   SecOpsModificationReason,
@@ -23,6 +24,7 @@ import type {
 interface ReportResultsEditorProps {
   reportId: string;
   currentStatus: ReportStatus;
+  report?: ReportRecord | null;
   validatedAt?: string | null;
   onBack: () => void;
   onReportRegenerated: (reportId: string, reportUrl: string) => void;
@@ -56,6 +58,7 @@ function fromMultiline(value: string): string[] {
 export function ReportResultsEditor({
   reportId,
   currentStatus,
+  report,
   validatedAt,
   onBack,
   onReportRegenerated,
@@ -72,6 +75,8 @@ export function ReportResultsEditor({
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [selectedReasonCodes, setSelectedReasonCodes] = useState<string[]>([]);
   const [freeComment, setFreeComment] = useState('');
+  const latestManagerComment = report?.status_history.find((entry) => Boolean(entry.comment))?.comment?.trim() || '';
+  const rejectionFeedback = report?.manager_feedback.filter((entry) => entry.decision_type === 'REJECTED') || [];
 
   useEffect(() => {
     const load = async () => {
@@ -428,6 +433,41 @@ export function ReportResultsEditor({
           Version actuelle: {payload.application_version ?? 'v1'}
         </p>
       </div>
+
+      {currentStatus === 'REJECTED' && report && (
+        <div className="rounded-2xl border border-red-200 bg-[linear-gradient(135deg,#fff5f5,#fffdfd)] p-6 md:p-8 mb-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-red-600">
+            Retour manager
+          </p>
+          {latestManagerComment && (
+            <div className="mt-4 rounded-xl border border-red-100 bg-white px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Dernier commentaire
+              </p>
+              <p className="mt-1 text-sm leading-6 text-slate-700">
+                {latestManagerComment}
+              </p>
+            </div>
+          )}
+          {rejectionFeedback.length > 0 && (
+            <div className="mt-4 rounded-xl border border-red-100 bg-white px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Motifs de rejet
+              </p>
+              <ul className="mt-2 space-y-2">
+                {rejectionFeedback.map((entry) => (
+                  <li key={entry.id} className="text-sm text-slate-700">
+                    <span className="font-semibold">{entry.reason_code}</span>
+                    {entry.comment && entry.comment.trim() !== latestManagerComment
+                      ? ` - ${entry.comment}`
+                      : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="rounded-2xl border border-border-subtle bg-white p-6 md:p-8 space-y-5">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

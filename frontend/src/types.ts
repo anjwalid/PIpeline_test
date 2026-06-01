@@ -420,6 +420,22 @@ export interface EditableThreat {
   references?: CatalogReference[];
 }
 
+export interface ReportResultVersionRecord {
+  version_number: number;
+  version_label: string;
+  app_name: string;
+  developer_name: string;
+  application_description: string;
+  selected_threats: EditableThreat[];
+  dfd_image_path?: string | null;
+  dfd_reference?: string | null;
+  download_url?: string | null;
+  created_by_username?: string | null;
+  created_by_email?: string | null;
+  change_reason?: string | null;
+  created_at: string;
+}
+
 export interface ReportResultsPayload {
   app_name: string;
   developer_name: string;
@@ -434,7 +450,9 @@ export interface ReportResultsPayload {
 
 export interface ReportResultsRecord extends ReportResultsPayload {
   report_id: string;
+  version_number: number;
   updated_at?: string | null;
+  version_history: ReportResultVersionRecord[];
 }
 
 export interface ReportsByMonthEntry {
@@ -462,6 +480,10 @@ export interface ManagerDashboardMetrics {
   total_reports: number;
   approved_reports: number;
   approval_rate: number;
+  global_approved_reports: number;
+  global_approval_rate: number;
+  my_approved_reports: number;
+  my_approval_rate: number;
   average_validation_time_hours?: number | null;
   reports_by_month: ReportsByMonthEntry[];
   most_frequent_threats: ThreatFrequencyEntry[];

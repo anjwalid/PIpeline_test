@@ -1,10 +1,11 @@
-import { CalendarClock, FileSearch, RefreshCcw } from 'lucide-react';
+import { CalendarClock, FileSearch, RefreshCcw, Trash2 } from 'lucide-react';
 import type { ReportRecord, ReportStatus } from '../types';
 
 interface HistoryViewProps {
   history: ReportRecord[];
   onOpenReport: (reportId: string, url: string) => void;
   onEditReport?: (reportId: string) => void;
+  onDeleteReport?: (reportId: string) => void;
   onNewAnalysis?: () => void;
   showNewAnalysisButton?: boolean;
   title?: string;
@@ -26,6 +27,7 @@ export function HistoryView({
   history,
   onOpenReport,
   onEditReport,
+  onDeleteReport,
   onNewAnalysis,
   showNewAnalysisButton = true,
   title = 'Versions precedentes',
@@ -97,6 +99,15 @@ export function HistoryView({
                       className="px-4 py-2 rounded-lg border border-border-subtle text-text-primary hover:border-accent-primary transition"
                     >
                       Modifier
+                    </button>
+                  )}
+                  {onDeleteReport && item.status === 'DRAFT' && (
+                    <button
+                      onClick={() => onDeleteReport(item.id)}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Supprimer
                     </button>
                   )}
                   <button

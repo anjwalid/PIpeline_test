@@ -2,9 +2,12 @@ import logging
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api.admin_catalog import router as admin_catalog_router
+from app.api.admin_cve_graph import router as admin_cve_graph_router
 from app.api.admin_audit import router as admin_audit_router
 from app.api.admin_questionnaire import router as admin_questionnaire_router
 from app.api.analysis import router as analysis_router
@@ -12,8 +15,10 @@ from app.api.llm_feedback import router as llm_feedback_router
 from app.api.questionnaire import router as questionnaire_router
 from app.api.reports import router as reports_router
 from app.api.secops_chat import router as secops_chat_router
+from app.core.config import settings
 from app.repositories.questionnaire_repository import QuestionnaireRepository
 from app.services.audit_service import AuditService
+from app.services.cve_sync_service import CveSyncService
 from app.services.report_management_service import ReportManagementService
 
 logging.basicConfig(
@@ -31,15 +36,41 @@ def startup_prepare_schema():
     ReportManagementService.ensure_schema()
     QuestionnaireRepository.ensure_schema()
     AuditService.ensure_schema()
+    CveSyncService.start()
+
+
+@app.on_event("shutdown")
+def shutdown_background_services():
+    CveSyncService.stop()
+
+
+if settings.TRUSTED_HOSTS and "*" not in settings.TRUSTED_HOSTS:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=settings.TRUSTED_HOSTS,
+    )
 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.exception_handler(Exception)
@@ -56,7 +87,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
                 "error_type": "UNHANDLED_EXCEPTION",
                 "step": "global_exception_handler",
                 "message": "Une erreur non geree est survenue dans le backend.",
-                "cause": str(exc),
+                "cause": str(exc) if settings.DEBUG_INCLUDE_ERROR_CAUSE else None,
                 "path": request.url.path,
                 "method": request.method,
             }
@@ -72,11 +103,18 @@ def health_check():
 app.include_router(questionnaire_router)
 app.include_router(admin_questionnaire_router)
 app.include_router(admin_catalog_router)
+app.include_router(admin_cve_graph_router)
 app.include_router(admin_audit_router)
 app.include_router(analysis_router)
 app.include_router(reports_router)
 app.include_router(llm_feedback_router)
 app.include_router(secops_chat_router)
+
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    excluded_handlers=["/health", "/metrics"],
+).instrument(app).expose(app, endpoint="/metrics")
 
 
 @app.get("/")

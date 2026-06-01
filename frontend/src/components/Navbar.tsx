@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  ArrowLeft,
   Bell,
   Menu,
   X,
@@ -26,6 +27,13 @@ export interface NavbarNotificationCenter {
   title: string;
   unreadCount: number;
   items: NavbarNotificationItem[];
+  onDeleteItem?: (id: string) => void;
+  onClearAll?: () => void;
+}
+
+export interface NavbarBackAction {
+  label?: string;
+  onClick: () => void;
 }
 
 interface NavbarProps<TSection extends string = string> {
@@ -37,6 +45,8 @@ interface NavbarProps<TSection extends string = string> {
   onLogout: () => void;
   navItems: NavItem<TSection>[];
   notificationCenter?: NavbarNotificationCenter | null;
+  backAction?: NavbarBackAction | null;
+  onNotificationOpenChange?: (isOpen: boolean) => void;
 }
 
 export function Navbar<TSection extends string = string>({
@@ -46,6 +56,8 @@ export function Navbar<TSection extends string = string>({
   onLogout,
   navItems,
   notificationCenter,
+  backAction,
+  onNotificationOpenChange,
 }: Readonly<NavbarProps<TSection>>) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
@@ -74,6 +86,14 @@ export function Navbar<TSection extends string = string>({
     onLogout();
   };
 
+  const toggleNotifications = () => {
+    setIsNotificationOpen((previous) => {
+      const nextValue = !previous;
+      onNotificationOpenChange?.(nextValue);
+      return nextValue;
+    });
+  };
+
   return (
     <>
       <nav className="fixed top-0 left-0 right-0 z-50">
@@ -93,6 +113,18 @@ export function Navbar<TSection extends string = string>({
                   <Menu className="h-5 w-5" />
                 )}
               </button>
+
+              {backAction && (
+                <button
+                  type="button"
+                  onClick={backAction.onClick}
+                  className="flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 hover:shadow-sm md:px-4"
+                  aria-label={backAction.label || 'Revenir en arriere'}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span className="hidden md:inline">{backAction.label || 'Retour'}</span>
+                </button>
+              )}
 
               <div className="flex min-w-0 items-center gap-3 md:gap-4">
                 <img
@@ -127,7 +159,7 @@ export function Navbar<TSection extends string = string>({
                 <div className="relative hidden md:block">
                   <button
                     type="button"
-                    onClick={() => setIsNotificationOpen((previous) => !previous)}
+                    onClick={toggleNotifications}
                     className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50"
                     aria-label="Ouvrir les notifications"
                     aria-expanded={isNotificationOpen}
@@ -149,13 +181,26 @@ export function Navbar<TSection extends string = string>({
                               {notificationCenter.title}
                             </p>
                             <p className="mt-1 text-xs text-slate-500">
-                              Suivi des nouveautés sur les menaces du catalogue.
+                              Suivi des validations et retours manager.
                             </p>
                           </div>
                           <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
                             {notificationCenter.unreadCount} nouvelle{notificationCenter.unreadCount > 1 ? 's' : ''}
                           </span>
                         </div>
+                        {notificationCenter.onClearAll && notificationCenter.items.length > 0 && (
+                          <div className="mt-3 flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={notificationCenter.onClearAll}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-red-200 bg-white text-red-600 transition hover:bg-red-50"
+                              aria-label="Supprimer toutes les notifications"
+                              title="Supprimer toutes les notifications"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       <div className="max-h-[360px] overflow-y-auto p-3">
@@ -166,18 +211,32 @@ export function Navbar<TSection extends string = string>({
                                 key={item.id}
                                 className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
                               >
-                                <p className="text-sm font-semibold text-slate-900">
-                                  {item.title}
-                                </p>
-                                <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                                  {item.description}
-                                </p>
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-semibold text-slate-900">
+                                      {item.title}
+                                    </p>
+                                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                                      {item.description}
+                                    </p>
+                                  </div>
+                                  {notificationCenter.onDeleteItem && (
+                                    <button
+                                      type="button"
+                                      onClick={() => notificationCenter.onDeleteItem?.(item.id)}
+                                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                                      aria-label="Supprimer la notification"
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             ))}
                           </div>
                         ) : (
                           <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500">
-                            Aucune nouveauté sur les menaces pour le moment.
+                            Aucune notification pour le moment.
                           </div>
                         )}
                       </div>
