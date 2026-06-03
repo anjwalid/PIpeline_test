@@ -33,7 +33,7 @@ import {
   updateInternalSecuritySolution,
   updateCatalogReferenceRecord,
 } from '../../api/catalog';
-import keycloak from '../../auth/keycloak';
+import { buildAuthenticatedHeaders } from '../../auth/apiAuth';
 import { CveGraphExplorer } from '../../components/CveGraphExplorer';
 import { Navbar } from '../../components/Navbar';
 import { pushBrowserPath } from '../../utils/navigation';
@@ -178,20 +178,6 @@ const INTERNAL_SOLUTION_USAGE_SUGGESTIONS = [
   'Conformite et audit',
   'Vulnerability management',
 ];
-
-function buildAuthHeaders(contentType = false): HeadersInit {
-  const headers: HeadersInit = {};
-
-  if (contentType) {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  if (keycloak.authenticated && keycloak.token) {
-    headers.Authorization = `Bearer ${keycloak.token}`;
-  }
-
-  return headers;
-}
 
 interface EditableReferenceForm {
   id_reference: number | null;
@@ -670,7 +656,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
       setErrorMessage('');
 
       const response = await fetch(`${API_BASE_URL}/admin/questionnaires`, {
-        headers: buildAuthHeaders(),
+        headers: await buildAuthenticatedHeaders(),
       });
       if (!response.ok) {
         throw new Error('Impossible de charger les questionnaires.');
@@ -828,7 +814,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
         setErrorMessage('');
 
         const response = await fetch(`${API_BASE_URL}/admin/questionnaires/${selectedQuestionnaireId}`, {
-          headers: buildAuthHeaders(),
+          headers: await buildAuthenticatedHeaders(),
         });
         if (!response.ok) {
           throw new Error('Impossible de charger le questionnaire sélectionné.');
@@ -1725,7 +1711,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
           : `${API_BASE_URL}/admin/questionnaires/${selectedQuestionnaireId}`,
         {
           method: isCreating ? 'POST' : 'PUT',
-          headers: buildAuthHeaders(true),
+          headers: await buildAuthenticatedHeaders({ contentType: 'application/json' }),
           body: JSON.stringify(payload),
         }
       );
@@ -1773,7 +1759,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
       setIsSaving(true);
       const response = await fetch(`${API_BASE_URL}/admin/questionnaires/${selectedQuestionnaireId}`, {
         method: 'DELETE',
-        headers: buildAuthHeaders(),
+        headers: await buildAuthenticatedHeaders(),
       });
 
       if (!response.ok) {
@@ -1834,7 +1820,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
           : `${API_BASE_URL}/admin/catalog/threats/${selectedCatalogThreatId}`,
         {
           method: isCreating ? 'POST' : 'PUT',
-          headers: buildAuthHeaders(true),
+          headers: await buildAuthenticatedHeaders({ contentType: 'application/json' }),
           body: JSON.stringify(payload),
         }
       );
@@ -1877,7 +1863,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
 
       const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/${selectedCatalogThreatId}`, {
         method: 'DELETE',
-        headers: buildAuthHeaders(),
+        headers: await buildAuthenticatedHeaders(),
       });
 
       if (!response.ok) {
@@ -1908,7 +1894,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
 
       const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/refresh`, {
         method: 'POST',
-        headers: buildAuthHeaders(),
+        headers: await buildAuthenticatedHeaders(),
       });
 
       if (!response.ok) {

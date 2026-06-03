@@ -23,7 +23,7 @@ import type {
   ReportRecord,
   SecOpsChatDraftContext,
 } from '../../types';
-import keycloak from '../../auth/keycloak';
+import { buildAuthenticatedHeaders } from '../../auth/apiAuth';
 import { pushBrowserPath } from '../../utils/navigation';
 
 type ViewState = 'form' | 'loading' | 'error' | 'report' | 'report_editor';
@@ -264,17 +264,9 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
     try {
       setLoadingStep('sent');
 
-      const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-      };
-
-      if (keycloak.authenticated && keycloak.token) {
-        headers.Authorization = `Bearer ${keycloak.token}`;
-      }
-
       const fetchPromise = fetch(`${API_BASE_URL}/analyze`, {
         method: 'POST',
-        headers,
+        headers: await buildAuthenticatedHeaders({ contentType: 'application/json' }),
         body: JSON.stringify(data),
       });
 

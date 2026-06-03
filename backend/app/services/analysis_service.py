@@ -1,6 +1,7 @@
 import json
 import logging
 from pathlib import Path
+import re
 import uuid
 
 from app.core.auth import AuthenticatedUser
@@ -37,6 +38,14 @@ class AnalysisService:
     _latest_dfd_path: str | None = None
     _latest_report_owner_id: uuid.UUID | None = None
     _latest_dfd_owner_id: uuid.UUID | None = None
+    _MATCHING_STOPWORDS = {
+        "the", "and", "for", "with", "from", "that", "this", "dans", "avec", "pour", "sans",
+        "une", "des", "les", "est", "sur", "par", "aux", "via", "plus", "moins", "contre",
+        "entre", "sont", "etre", "ont", "nous", "vous", "leur", "leurs", "cela", "comme",
+        "application", "applicatif", "service", "systeme", "donnees", "utilisateur",
+        "interne", "externes", "externe", "microservice", "frontend", "backend",
+        "mitigation", "security", "securite", "solution", "plateforme", "outil",
+    }
 
     @staticmethod
     def _normalize_answer_candidates(answer_row: dict) -> list[str]:
@@ -227,9 +236,131 @@ class AnalysisService:
         return lightweight_catalog
 
     @staticmethod
+    def _tokenize_for_matching(*values: str) -> set[str]:
+        tokens: set[str] = set()
+        for value in values:
+            for token in re.findall(r"[a-zA-Z0-9][a-zA-Z0-9.+#_-]{1,}", str(value or "").lower()):
+                if token in AnalysisService._MATCHING_STOPWORDS:
+                    continue
+                if len(token) <= 2 and not any(char.isdigit() for char in token):
+                    continue
+                tokens.add(token)
+        return tokens
+
+    @staticmethod
+    def _load_internal_security_solutions() -> list[dict]:
+        try:
+            raw_solutions = CatalogRepository.list_internal_solutions()
+        except Exception:
+            logger.warning("Impossible de charger les solutions internes pour les mitigations.", exc_info=True)
+            return []
+
+        normalized_solutions: list[dict] = []
+        for row in raw_solutions or []:
+            if row.get("actif") is False:
+                continue
+
+            name = str(row.get("nom_solution") or "").strip()
+            solution_type = str(row.get("type_solution") or "").strip()
+            usage = str(row.get("usage_securite") or "").strip()
+            description = str(row.get("description_solution") or "").strip()
+            vendor = str(row.get("editeur_solution") or "").strip()
+            if not name:
+                continue
+
+            normalized_solutions.append(
+                {
+                    "name": name,
+                    "type": solution_type,
+                    "vendor": vendor,
+                    "security_usage": usage,
+                    "description": description,
+                    "match_tokens": AnalysisService._tokenize_for_matching(
+                        name,
+                        solution_type,
+                        vendor,
+                        usage,
+                        description,
+                    ),
+                }
+            )
+
+        return normalized_solutions
+
+    @staticmethod
+    def _select_internal_solution_candidates(
+        threat_name: str,
+        threat_description: str,
+        attack_scenarios: list[str],
+        app_name: str,
+        generated_description: str,
+        context_bundle: dict,
+        internal_solutions: list[dict],
+        limit: int = 5,
+    ) -> list[dict]:
+        if not internal_solutions:
+            return []
+
+        context_text = " ".join(
+            [
+                app_name,
+                generated_description,
+                context_bundle.get("context_text") or "",
+                threat_name,
+                threat_description,
+                " ".join(str(item) for item in (attack_scenarios or [])),
+            ]
+        )
+        context_tokens = AnalysisService._tokenize_for_matching(context_text)
+        ranked_candidates: list[tuple[int, str, dict]] = []
+
+        for solution in internal_solutions:
+            solution_tokens = solution.get("match_tokens") or set()
+            if not solution_tokens:
+                continue
+
+            overlap = context_tokens & solution_tokens
+            if not overlap:
+                continue
+
+            score = len(overlap) * 2
+            solution_name = str(solution.get("name") or "")
+            usage = str(solution.get("security_usage") or "")
+            solution_type = str(solution.get("type") or "")
+
+            lowered_context = context_text.lower()
+            if solution_name and solution_name.lower() in lowered_context:
+                score += 4
+            if usage and any(token in lowered_context for token in AnalysisService._tokenize_for_matching(usage)):
+                score += 2
+            if solution_type and any(token in lowered_context for token in AnalysisService._tokenize_for_matching(solution_type)):
+                score += 1
+
+            ranked_candidates.append(
+                (
+                    score,
+                    solution_name.casefold(),
+                    {
+                        "name": solution_name,
+                        "type": solution_type,
+                        "vendor": str(solution.get("vendor") or ""),
+                        "security_usage": usage,
+                        "description": str(solution.get("description") or ""),
+                    },
+                )
+            )
+
+        ranked_candidates.sort(key=lambda item: (-item[0], item[1]))
+        return [candidate for _, _, candidate in ranked_candidates[:limit]]
+
+    @staticmethod
     def _build_mitigation_payload(
         selected_threats: list[dict],
         catalog_threats: list[dict],
+        app_name: str,
+        generated_description: str,
+        context_bundle: dict,
+        internal_solutions: list[dict],
     ) -> list[dict]:
         catalog_by_name = {
             str(threat.get("nom_menace") or threat.get("name") or "").strip().casefold(): threat
@@ -249,6 +380,19 @@ class AnalysisService:
                 mitigation_text = str(mitigation.get("description_mitigation") or "").strip()
                 if mitigation_text:
                     db_mitigations.append(mitigation_text)
+            internal_solution_candidates = AnalysisService._select_internal_solution_candidates(
+                threat_name=threat_name,
+                threat_description=str(
+                    selected_threat.get("description")
+                    or catalog_match.get("description")
+                    or ""
+                ).strip(),
+                attack_scenarios=selected_threat.get("attack_scenarios") or [],
+                app_name=app_name,
+                generated_description=generated_description,
+                context_bundle=context_bundle,
+                internal_solutions=internal_solutions,
+            )
 
             payload.append(
                 {
@@ -260,6 +404,7 @@ class AnalysisService:
                     ).strip(),
                     "attack_scenarios": selected_threat.get("attack_scenarios") or [],
                     "existing_mitigations": db_mitigations,
+                    "internal_solution_candidates": internal_solution_candidates,
                 }
             )
 
@@ -652,9 +797,14 @@ class AnalysisService:
                 selected_threats = AnalysisService._normalize_selected_threats(
                     scenario_enrichment_result
                 )
+                internal_solutions = AnalysisService._load_internal_security_solutions()
                 mitigation_payload = AnalysisService._build_mitigation_payload(
                     selected_threats=selected_threats,
                     catalog_threats=catalog_threats,
+                    app_name=app_name,
+                    generated_description=generated_description,
+                    context_bundle=context_bundle,
+                    internal_solutions=internal_solutions,
                 )
                 mitigated_result = AnalysisService._enrich_threat_mitigations(
                     app_name=app_name,

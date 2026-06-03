@@ -1,4 +1,4 @@
-import keycloak from '../auth/keycloak';
+import { buildAuthenticatedHeaders } from '../auth/apiAuth';
 import { API_BASE_URL } from '../config';
 import type {
   ManagerReviewFeedbackItem,
@@ -10,20 +10,6 @@ import type {
 } from '../types';
 
 type RawReportStatus = ReportStatus | 'PENDING_MANAGER_VALIDATION' | 'IN_PROGRESS' | 'NEEDS_CHANGES' | 'GENERATED';
-
-function buildHeaders(contentType = false): HeadersInit {
-  const headers: HeadersInit = {};
-
-  if (contentType) {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  if (keycloak.authenticated && keycloak.token) {
-    headers.Authorization = `Bearer ${keycloak.token}`;
-  }
-
-  return headers;
-}
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const data = (await response.json()) as T | { detail?: string };
@@ -110,7 +96,7 @@ export function toAbsoluteReportUrl(reportUrl: string): string {
 export async function fetchMyReports(): Promise<ReportRecord[]> {
   const response = await fetch(`${API_BASE_URL}/reports/me`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   const reports = await parseResponse<ReportRecord[]>(response);
@@ -122,7 +108,7 @@ export async function fetchMyReports(): Promise<ReportRecord[]> {
 export async function fetchAllReports(): Promise<ReportRecord[]> {
   const response = await fetch(`${API_BASE_URL}/reports`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   const reports = await parseResponse<ReportRecord[]>(response);
@@ -132,7 +118,7 @@ export async function fetchAllReports(): Promise<ReportRecord[]> {
 export async function fetchManagerDashboardMetrics(): Promise<ManagerDashboardMetrics> {
   const response = await fetch(`${API_BASE_URL}/reports/dashboard/manager`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   const metrics = await parseResponse<ManagerDashboardMetrics>(response);
@@ -147,7 +133,7 @@ export async function updateReportStatus(
 ): Promise<ReportRecord> {
   const response = await fetch(`${API_BASE_URL}/reports/${reportId}/status`, {
     method: 'PATCH',
-    headers: buildHeaders(true),
+    headers: await buildAuthenticatedHeaders({ contentType: 'application/json' }),
     body: JSON.stringify({
       status,
       comment: comment?.trim() || null,
@@ -162,7 +148,7 @@ export async function updateReportStatus(
 export async function fetchReportResults(reportId: string): Promise<ReportResultsRecord> {
   const response = await fetch(`${API_BASE_URL}/reports/${reportId}/results`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   return parseResponse<ReportResultsRecord>(response);
@@ -174,7 +160,7 @@ export async function updateReportResults(
 ): Promise<ReportResultsRecord> {
   const response = await fetch(`${API_BASE_URL}/reports/${reportId}/results`, {
     method: 'PUT',
-    headers: buildHeaders(true),
+    headers: await buildAuthenticatedHeaders({ contentType: 'application/json' }),
     body: JSON.stringify(payload),
   });
 
@@ -190,7 +176,7 @@ export async function uploadReportDfd(
 
   const response = await fetch(`${API_BASE_URL}/reports/${reportId}/dfd-upload`, {
     method: 'POST',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
     body: formData,
   });
 
@@ -200,7 +186,7 @@ export async function uploadReportDfd(
 export async function regenerateReport(reportId: string): Promise<ReportRecord> {
   const response = await fetch(`${API_BASE_URL}/reports/${reportId}/regenerate`, {
     method: 'POST',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   const report = await parseResponse<ReportRecord>(response);
@@ -210,7 +196,7 @@ export async function regenerateReport(reportId: string): Promise<ReportRecord> 
 export async function deleteReport(reportId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/reports/${reportId}`, {
     method: 'DELETE',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   if (!response.ok) {
@@ -221,7 +207,7 @@ export async function deleteReport(reportId: string): Promise<void> {
 export async function fetchReportBlobUrl(reportUrl: string): Promise<string> {
   const response = await fetch(reportUrl, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   if (!response.ok) {

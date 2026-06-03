@@ -24,6 +24,10 @@ class LlmServiceUnavailableError(LlmServiceError):
     pass
 
 
+class LlmServiceBadRequestError(LlmServiceError):
+    pass
+
+
 class LlmGuardrailBlockedError(LlmServiceError):
     def __init__(
         self,
@@ -102,6 +106,10 @@ def _call_litellm_chat(prompt: str, model: str) -> str:
         ) from exc
     except httpx.HTTPStatusError as exc:
         response_text = exc.response.text.strip() if exc.response is not None else ""
+        if exc.response is not None and exc.response.status_code == 400:
+            raise LlmServiceBadRequestError(
+                f"Error Code: 400\nMessage: {response_text[:4000]}"
+            ) from exc
         if exc.response is not None and exc.response.status_code == 500:
             blocked_entity_match = re.search(r"Blocked entity detected:\s*([A-Z_]+)", response_text)
             guardrail_match = re.search(r"Guardrail:\s*([^.\"]+)", response_text)

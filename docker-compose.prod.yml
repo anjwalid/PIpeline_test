@@ -1,0 +1,29 @@
+services:
+  backend:
+    image: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/awb-backend:${BUILD_TAG}
+    container_name: awb-backend-1
+    env_file:
+      - path: ./backend.env
+        required: false
+    environment:
+      DB_HOST: ${DB_HOST:-postgres_db}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  frontend:
+    image: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/awb-frontend:${BUILD_TAG}
+    container_name: awb-frontend-1
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    external: true

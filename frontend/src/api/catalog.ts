@@ -1,4 +1,4 @@
-import keycloak from '../auth/keycloak';
+import { buildAuthenticatedHeaders } from '../auth/apiAuth';
 import { API_BASE_URL } from '../config';
 import type {
   CatalogReference,
@@ -7,16 +7,6 @@ import type {
   CatalogThreatListItem,
   InternalSecuritySolution,
 } from '../types';
-
-function buildHeaders(): HeadersInit {
-  const headers: HeadersInit = {};
-
-  if (keycloak.authenticated && keycloak.token) {
-    headers.Authorization = `Bearer ${keycloak.token}`;
-  }
-
-  return headers;
-}
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const data = (await response.json()) as T | { detail?: string };
@@ -36,7 +26,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 export async function fetchCatalogThreats(): Promise<CatalogThreatListItem[]> {
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   return parseResponse<CatalogThreatListItem[]>(response);
@@ -45,7 +35,7 @@ export async function fetchCatalogThreats(): Promise<CatalogThreatListItem[]> {
 export async function fetchCatalogThreat(threatId: number): Promise<CatalogThreat> {
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/${threatId}`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   return parseResponse<CatalogThreat>(response);
@@ -54,7 +44,7 @@ export async function fetchCatalogThreat(threatId: number): Promise<CatalogThrea
 export async function fetchCatalogReferences(): Promise<CatalogReference[]> {
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/references`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   return parseResponse<CatalogReference[]>(response);
@@ -63,7 +53,7 @@ export async function fetchCatalogReferences(): Promise<CatalogReference[]> {
 export async function fetchCatalogReferenceGroups(): Promise<CatalogReferenceGroup[]> {
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/references/groups`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   return parseResponse<CatalogReferenceGroup[]>(response);
@@ -72,7 +62,7 @@ export async function fetchCatalogReferenceGroups(): Promise<CatalogReferenceGro
 export async function fetchInternalSecuritySolutions(): Promise<InternalSecuritySolution[]> {
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/internal-solutions`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   return parseResponse<InternalSecuritySolution[]>(response);
@@ -84,7 +74,7 @@ export async function createInternalSecuritySolution(
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/internal-solutions`, {
     method: 'POST',
     headers: {
-      ...buildHeaders(),
+      ...(await buildAuthenticatedHeaders()),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -100,7 +90,7 @@ export async function updateInternalSecuritySolution(
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/internal-solutions/${solutionId}`, {
     method: 'PUT',
     headers: {
-      ...buildHeaders(),
+      ...(await buildAuthenticatedHeaders()),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -112,7 +102,7 @@ export async function updateInternalSecuritySolution(
 export async function deleteInternalSecuritySolution(solutionId: number): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/internal-solutions/${solutionId}`, {
     method: 'DELETE',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   await parseResponse<{ deleted: boolean }>(response);
@@ -124,7 +114,7 @@ export async function createCatalogReference(
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/references`, {
     method: 'POST',
     headers: {
-      ...buildHeaders(),
+      ...(await buildAuthenticatedHeaders()),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -140,7 +130,7 @@ export async function updateCatalogReferenceRecord(
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/references/${referenceId}`, {
     method: 'PUT',
     headers: {
-      ...buildHeaders(),
+      ...(await buildAuthenticatedHeaders()),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -152,7 +142,7 @@ export async function updateCatalogReferenceRecord(
 export async function deleteCatalogReferenceRecord(referenceId: number): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/references/${referenceId}`, {
     method: 'DELETE',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   await parseResponse<{ deleted: boolean }>(response);
@@ -161,7 +151,7 @@ export async function deleteCatalogReferenceRecord(referenceId: number): Promise
 export async function exportCatalogThreatWorkbook(): Promise<Blob> {
   const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/export`, {
     method: 'GET',
-    headers: buildHeaders(),
+    headers: await buildAuthenticatedHeaders(),
   });
 
   if (!response.ok) {

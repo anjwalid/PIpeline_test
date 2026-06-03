@@ -101,6 +101,14 @@ class Settings:
     SECOPS_CHAT_RATE_LIMIT_WINDOW_SECONDS: int = int(
         os.getenv("SECOPS_CHAT_RATE_LIMIT_WINDOW_SECONDS", "60")
     )
+    SECOPS_CHAT_REQUIRE_SCOPE_ALLOWLIST: bool = _parse_bool_env(
+        os.getenv("SECOPS_CHAT_REQUIRE_SCOPE_ALLOWLIST"),
+        default=True,
+    )
+    SECOPS_CHAT_GENERAL_MODE: bool = _parse_bool_env(
+        os.getenv("SECOPS_CHAT_GENERAL_MODE"),
+        default=False,
+    )
     ADMIN_RATE_LIMIT_COUNT: int = int(os.getenv("ADMIN_RATE_LIMIT_COUNT", "120"))
     ADMIN_RATE_LIMIT_WINDOW_SECONDS: int = int(
         os.getenv("ADMIN_RATE_LIMIT_WINDOW_SECONDS", "60")

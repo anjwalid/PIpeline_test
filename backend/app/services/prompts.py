@@ -124,12 +124,17 @@ Tu dois :
 - conserver la coherence entre chaque menace et sa description
 - t appuyer sur les scenarios existants comme base de travail
 - utiliser le contexte CVE uniquement pour renforcer les scenarios
-- produire des scenarios plus connectes a l architecture reelle, plus concrets, plus techniques et plus plausibles
-- integrer implicitement les mecanismes d exploitation decrits dans les CVE lorsque cela eclaire la menace, sans transformer la reponse en liste de CVE
+- produire des scenarios plus connectes a l architecture reelle, plus concrets, plus techniques, plus structures et plus plausibles
+- raisonner comme un attaquant reel : point d entree, composant expose, condition d exploitation, charge utile, propagation, cible finale
+- integrer explicitement les mecanismes d exploitation decrits dans les CVE lorsque cela eclaire la menace
 - eviter les scenarios generiques, abstraits ou hors contexte
 - expliciter le point d entree, le composant vise, la condition d exploitation et l effet recherche quand ces elements sont deducibles du contexte
-- t appuyer sur les descriptions CVE pour reutiliser des mecanismes d attaque realistes, mais sans copier textuellement ni citer des CVE dans chaque phrase
+- t appuyer sur les descriptions CVE pour reutiliser des mecanismes d attaque realistes
+- quand une CVE du contexte est logiquement reliee au composant cible, citer explicitement son identifiant dans le scenario, par exemple "Un attaquant exploite CVE-2025-1234 sur le composant X..."
+- si aucune CVE du contexte n est reellement pertinente pour la menace, ne pas en inventer et ne pas en forcer une
+- preferer une formulation directe orientee attaquant : "Un attaquant utilise...", "Un attaquant exploite CVE-...", "Depuis le frontend, l attaquant..."
 - produire une logique d attaque progressive et credible, pas une suite de slogans de securite
+- produire des scenarios forts qui montrent comment la menace se materialise concretement dans CETTE application et pas dans une application generique
 
 Regles strictes :
 - repondre uniquement en JSON
@@ -138,8 +143,19 @@ Regles strictes :
 - chaque menace doit contenir un nom, une description et une liste attack_scenarios
 - les champs name et description doivent rester coherents avec les menaces deja retenues
 - attack_scenarios doit contenir entre 2 et 4 phrases claires en francais
+- chaque scenario doit commencer par une action d attaquant explicite
 - chaque scenario doit decrire une logique d attaque credible dans le contexte reel de l application
 - chaque scenario doit etre plus fort que la version initiale sur au moins un axe : precision technique, logique d enchainement, ancrage dans les composants ou realisme d exploitation
+- si une CVE pertinente est presente dans le contexte, le scenario doit l exploiter explicitement plutot que de parler d une faille de maniere abstraite
+- chaque scenario doit suivre implicitement cette structure :
+- 1. point d entree ou condition initiale
+- 2. composant exact vise
+- 3. mecanisme d exploitation ou CVE si pertinente
+- 4. action obtenue par l attaquant
+- 5. consequence concrete sur les actifs, donnees, comptes ou flux
+- interdire les faux identifiants CVE, les CVE inventees, les formulations floues du type "une faille similaire a..." ou "un defaut potentiel..."
+- interdire les hypotheses non fondees sur des composants non presents dans le contexte
+- interdire les phrases faibles du type "un attaquant compromet le systeme" sans expliquer comment
 - si le contexte CVE n apporte rien d utile a une menace, ne pas forcer artificiellement un scenario pseudo-technique
 - ne pas inventer de composants, de flux, de versions ou de failles absentes du contexte
 - ne pas transformer les scenarios en phrases trop longues, confuses ou encyclopediques
@@ -170,6 +186,7 @@ Analyser l architecture de l application a partir :
 - des indications techniques de diagramme
 - d une liste de menaces deja retenues avec leurs scenarios d attaque
 - des mitigations existantes en base de donnees pour ces menaces
+- des solutions de securite internes candidates lorsqu elles sont fournies
 
 Tu dois :
 - conserver strictement les menaces deja retenues
@@ -182,6 +199,10 @@ Tu dois :
 - prioriser les mitigations les plus exigeantes et les plus critiques lorsque le contexte applicatif est critique
 - relier implicitement chaque mitigation au mecanisme d attaque decrit dans les scenarios
 - privilegier les mesures techniques actionnables plutot que les recommandations vagues de gouvernance
+- lorsqu une solution interne candidate couvre clairement une mitigation, contextualiser la mitigation avec le nom exact de cette solution
+- utiliser les solutions internes comme moyens de mise en oeuvre, pas comme decoration
+- si aucune solution interne candidate n est clairement adaptee, garder une mitigation generique et ne citer aucun produit interne
+- raisonner de facon prudente : une solution interne ne doit etre mentionnee que si son usage securite, son type ou sa description rendent le lien explicite
 
 Regles strictes :
 - repondre uniquement en JSON
@@ -198,6 +219,9 @@ Regles strictes :
 - ne pas produire de controles triviaux ou tautologiques du type "securiser le systeme" ou "mettre de la securite"
 - lorsqu une mitigation est deja couverte par une autre plus precise, ne garder que la plus precise
 - pour un contexte critique, viser une sortie dense et utile avec seulement les mitigations les plus exigeantes et prioritaires
+- ne citer une solution interne que si elle apparait explicitement dans internal_solution_candidates de la menace concernee
+- ne jamais inventer une capacite, un deploiement, une integration ou une couverture de solution interne qui n est pas decrite
+- si tu cites une solution interne, garde le nom exact et explique implicitement son role dans la mitigation
 - limiter le nombre total de menaces retenues au strict necessaire ; pour un contexte critique, ne jamais depasser 40 a 50 menaces et seulement si elles sont reellement justifiees
 
 Structure obligatoire :

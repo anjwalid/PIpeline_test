@@ -10,7 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import Logoproj from "../../assets/LOGO_OF.png";
-import { sendSecOpsChatMessage } from '../api/secopsChat';
+import { SecOpsChatGuardrailError, SecOpsChatPopupError, sendSecOpsChatMessage } from '../api/secopsChat';
 import type {
   SecOpsChatActionGroup,
   SecOpsChatActionOption,
@@ -75,6 +75,7 @@ export function SecOpsChatbot({
   reportId,
   draftContext,
 }: Readonly<SecOpsChatbotProps>) {
+  const [chatMode, setChatMode] = useState<'guided' | 'normal'>('guided');
   const [isOpen, setIsOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -82,6 +83,7 @@ export function SecOpsChatbot({
   const [messages, setMessages] = useState<ChatMessage[]>(DEFAULT_MESSAGES);
   const [isSending, setIsSending] = useState(false);
   const [optionGroups, setOptionGroups] = useState<SecOpsChatActionGroup[]>([]);
+  const [optionSearch, setOptionSearch] = useState('');
   const [position, setPosition] = useState<FloatingPosition>(() => getViewportPosition(CLOSED_DIMENSIONS));
   const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -90,11 +92,28 @@ export function SecOpsChatbot({
   const positionRef = useRef(position);
 
   const headerSubtitle = useMemo(() => {
+    if (chatMode === 'normal') {
+      return 'Assistant conversationnel libre';
+    }
     if (draftContext?.active_question) {
       return 'Aide au remplissage et a la consultation';
     }
     return 'Guide par actions metier';
-  }, [draftContext]);
+  }, [chatMode, draftContext]);
+
+  const filteredOptionGroups = useMemo(() => {
+    const normalizedSearch = optionSearch.trim().toLowerCase();
+    if (!normalizedSearch) {
+      return optionGroups;
+    }
+
+    return optionGroups
+      .map((group) => ({
+        ...group,
+        options: group.options.filter((option) => option.label.toLowerCase().includes(normalizedSearch)),
+      }))
+      .filter((group) => group.options.length > 0);
+  }, [optionGroups, optionSearch]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -205,6 +224,7 @@ export function SecOpsChatbot({
         message: payload.message ?? '',
         report_id: reportId || undefined,
         draft_context: draftContext || undefined,
+        chat_mode: chatMode,
         action_id: payload.action_id,
         action_payload: payload.action_payload,
       });
@@ -220,6 +240,9 @@ export function SecOpsChatbot({
       }
       setOptionGroups(response.option_groups || []);
     } catch (error) {
+      if (error instanceof SecOpsChatGuardrailError || error instanceof SecOpsChatPopupError) {
+        return;
+      }
       setMessages((current) => [
         ...current,
         {
@@ -238,8 +261,19 @@ export function SecOpsChatbot({
 
   useEffect(() => {
     if (!isOpen) return;
+    if (chatMode === 'normal') {
+      setOptionGroups([]);
+      setMessages([
+        {
+          id: 'welcome-general-bot',
+          sender: 'bot',
+          content: 'Mode chat normal active. Posez votre question librement.',
+        },
+      ]);
+      return;
+    }
     void requestChat({ action_id: 'SHOW_MAIN_MENU' }, { appendBotMessage: false });
-  }, [isOpen, reportId, draftContext?.active_question?.code]);
+  }, [chatMode, isOpen, reportId, draftContext?.active_question?.code]);
 
   const formatMessage = (content: string) =>
     content
@@ -300,7 +334,9 @@ export function SecOpsChatbot({
     setIsOpen(false);
     setIsFullscreen(false);
     setHasStarted(false);
+    setChatMode('guided');
     setDraft('');
+    setOptionSearch('');
     setMessages(DEFAULT_MESSAGES);
     setOptionGroups([]);
   };
@@ -346,7 +382,7 @@ export function SecOpsChatbot({
               isFullscreen ? '' : 'cursor-grab active:cursor-grabbing'
             } ${isDragging ? 'select-none' : ''}`}
           >
-            <div className="relative flex items-start justify-between gap-4">
+                <div className="relative flex items-start justify-between gap-4">
               <div className="flex min-w-0 items-center gap-3">
                 <img src={Logoproj} alt="Application logo" className="h-12 w-12 shrink-0 object-contain" />
                 <div className="min-w-0">
@@ -356,6 +392,35 @@ export function SecOpsChatbot({
               </div>
 
               <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextMode = chatMode === 'guided' ? 'normal' : 'guided';
+                    setChatMode(nextMode);
+                    setHasStarted(true);
+                    setDraft('');
+                    setOptionSearch('');
+                    setOptionGroups([]);
+                    setMessages(
+                      nextMode === 'normal'
+                        ? [
+                            {
+                              id: 'welcome-general-bot',
+                              sender: 'bot',
+                              content: 'Mode chat normal active. Posez votre question librement.',
+                            },
+                          ]
+                        : DEFAULT_MESSAGES
+                    );
+                  }}
+                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
+                    chatMode === 'normal'
+                      ? 'bg-white text-slate-900'
+                      : 'bg-white/16 text-white hover:bg-white/24'
+                  }`}
+                >
+                  {chatMode === 'normal' ? 'Chat normal' : 'Mode guide'}
+                </button>
                 <button
                   type="button"
                   onClick={() => setIsFullscreen((current) => !current)}
@@ -490,19 +555,23 @@ export function SecOpsChatbot({
                       <div className="rounded-[24px] border border-slate-200 bg-white px-3 py-2">
                         <div className="flex items-center gap-3">
                           <MessageCircleMore className="h-4.5 w-4.5 shrink-0 text-slate-400" />
-                          <input
-                            type="text"
-                            value={draft}
-                            onChange={(event) => setDraft(event.target.value)}
+                        <input
+                          type="text"
+                          value={draft}
+                          onChange={(event) => setDraft(event.target.value)}
                             onKeyDown={(event) => {
                               if (event.key === 'Enter') {
                                 event.preventDefault();
                                 void handleSend();
                               }
                             }}
-                            placeholder="Question libre ou detail complementaire..."
-                            className="h-11 min-w-0 flex-1 border-none bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
-                          />
+                          placeholder={
+                            chatMode === 'normal'
+                              ? 'Posez votre question librement...'
+                              : 'Question libre ou detail complementaire...'
+                          }
+                          className="h-11 min-w-0 flex-1 border-none bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
+                        />
                           <button
                             type="button"
                             onClick={() => void handleSend()}
@@ -519,7 +588,28 @@ export function SecOpsChatbot({
 
                 <aside className={`${isFullscreen ? 'hidden xl:flex' : 'hidden sm:flex'} min-h-0 overflow-hidden rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#fffaf6_0%,#ffffff_100%)] flex-col`}>
                   <div className="flex-1 overflow-y-auto p-4">
-                    {optionGroups.map((group) => (
+                    {chatMode === 'normal' ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-4 py-4 text-sm text-slate-500">
+                        Le mode chat normal masque les options guidees pour laisser la place aux questions libres.
+                      </div>
+                    ) : (
+                      <>
+                    <div className="mb-5">
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Recherche
+                      </p>
+                      <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-3">
+                        <input
+                          type="text"
+                          value={optionSearch}
+                          onChange={(event) => setOptionSearch(event.target.value)}
+                          placeholder="Filtrer rapports et options..."
+                          className="h-11 w-full border-none bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
+                        />
+                      </div>
+                    </div>
+
+                    {filteredOptionGroups.map((group) => (
                       <div key={group.title} className="mb-5">
                         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
                           {group.title}
@@ -539,6 +629,14 @@ export function SecOpsChatbot({
                         </div>
                       </div>
                     ))}
+
+                    {filteredOptionGroups.length === 0 && (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-4 py-4 text-sm text-slate-500">
+                        Aucun resultat pour cette recherche.
+                      </div>
+                    )}
+                      </>
+                    )}
                   </div>
                 </aside>
               </div>

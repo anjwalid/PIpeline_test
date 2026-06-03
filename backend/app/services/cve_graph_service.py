@@ -76,6 +76,10 @@ TECH_TERM_MAP: dict[str, list[str]] = {
 QUESTION_CODES_FOR_STACK = {
     "FRONTEND_TECH",
     "FRAMEWORK_BACKEND",
+    "MOBILE_PLATEFORM",
+    "API_STANDARD",
+    "AUTH_PROTOCOL",
+    "MICRO_PROTOCOL",
     "DB_LOCAL_REL",
     "DB_LOCAL_NOSQL",
     "DB_AWS_REL",
@@ -85,8 +89,14 @@ QUESTION_CODES_FOR_STACK = {
     "DB_GCP_REL",
     "DB_GCP_NOSQL",
     "BROKER_TECH",
+    "BROKER_PROTOCOL",
     "TASK_EXECUTOR_TECH",
+    "FILE_STORAGE",
+    "EXTERNAL_API_PROTOCOL",
+    "UPLOAD_PROTOCOL",
+    "EMAIL_PROTOCOL",
     "IDP_PROVIDER",
+    "LLM_TECHNOLOGY",
     "LLM_EXTERNAL_PROVIDER",
     "RAG_VECTOR_DB",
 }
@@ -195,19 +205,31 @@ class CveGraphService:
         }
 
         for question_code, answer in (answers or {}).items():
-            if question_code not in QUESTION_CODES_FOR_STACK:
+            if question_code in QUESTION_CODES_FOR_STACK:
+                if isinstance(answer, list):
+                    values = [str(item).strip().upper() for item in answer if str(item).strip()]
+                else:
+                    values = [str(answer).strip().upper()] if str(answer).strip() else []
+
+                for value in values:
+                    for mapped_term in TECH_TERM_MAP.get(value, [value.replace("_", " ").lower()]):
+                        cleaned = mapped_term.strip().lower()
+                        if cleaned:
+                            ordered_terms[cleaned] = None
                 continue
 
-            if isinstance(answer, list):
-                values = [str(item).strip().upper() for item in answer if str(item).strip()]
-            else:
-                values = [str(answer).strip().upper()] if str(answer).strip() else []
+            if not question_code.endswith("_VERSION"):
+                continue
 
-            for value in values:
-                for mapped_term in TECH_TERM_MAP.get(value, [value.replace("_", " ").lower()]):
-                    cleaned = mapped_term.strip().lower()
-                    if cleaned:
-                        ordered_terms[cleaned] = None
+            version_value = str(answer or "").strip().lower()
+            if not version_value:
+                continue
+
+            ordered_terms[version_value] = None
+            for token in re.findall(r"[a-zA-Z0-9][a-zA-Z0-9.+#-]*", version_value):
+                cleaned = token.strip().lower()
+                if cleaned:
+                    ordered_terms[cleaned] = None
 
         description_tokens = re.findall(r"[a-zA-Z0-9.+#-]{3,}", app_description.lower())
         for token in description_tokens:
@@ -219,7 +241,7 @@ class CveGraphService:
             if token in known_terms:
                 ordered_terms[token] = None
 
-        return list(ordered_terms.keys())[:12]
+        return list(ordered_terms.keys())[:20]
 
     @staticmethod
     def search_cves_by_terms(terms: list[str], limit: int = 12) -> list[dict[str, Any]]:

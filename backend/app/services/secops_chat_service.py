@@ -8,11 +8,14 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.core.auth import AuthenticatedUser, user_has_role
+from app.core.config import settings
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.questionnaire_repository import QuestionnaireRepository
 from app.repositories.report_repository import ReportRepository
 from app.services.llm_clients import (
+    LlmServiceBadRequestError,
+    LlmGuardrailBlockedError,
     LlmServiceTimeoutError,
     LlmServiceUnavailableError,
     call_mistral,
@@ -45,6 +48,8 @@ class SecOpsChatService:
 
     @staticmethod
     def _is_in_scope(message: str) -> bool:
+        if not settings.SECOPS_CHAT_REQUIRE_SCOPE_ALLOWLIST:
+            return True
         normalized = (message or "").casefold()
         return any(keyword in normalized for keyword in SecOpsChatService.ALLOWED_KEYWORDS)
 
@@ -610,6 +615,7 @@ class SecOpsChatService:
         current_user: AuthenticatedUser,
         report_id: str | None,
         draft_context: dict[str, Any] | None,
+        force_general_mode: bool = False,
     ) -> dict:
         user_message = (message or "").strip()
         if not user_message:
@@ -617,6 +623,13 @@ class SecOpsChatService:
                 report_id=report_id,
                 draft_context=draft_context,
                 current_user=current_user,
+            )
+        if force_general_mode or settings.SECOPS_CHAT_GENERAL_MODE:
+            return SecOpsChatService._reply_general_prompt(
+                message=user_message,
+                current_user=current_user,
+                report_id=report_id,
+                draft_context=draft_context,
             )
         if SecOpsChatService._is_greeting(user_message):
             return {
@@ -655,6 +668,10 @@ class SecOpsChatService:
         )
         try:
             return {"reply": clean_text_response(call_mistral(prompt)), "option_groups": []}
+        except LlmGuardrailBlockedError:
+            raise
+        except LlmServiceBadRequestError:
+            raise
         except LlmServiceTimeoutError:
             logger.warning("Timeout Mistral pendant une reponse SecOps", extra={"http_status": HTTPStatus.GATEWAY_TIMEOUT})
             return {"reply": "Le service SecOps met trop de temps a repondre.", "option_groups": []}
@@ -666,16 +683,57 @@ class SecOpsChatService:
             return {"reply": SecOpsChatService.TEMPORARY_UNAVAILABLE_REPLY, "option_groups": []}
 
     @staticmethod
+    def _reply_general_prompt(
+        *,
+        message: str,
+        current_user: AuthenticatedUser,
+        report_id: str | None,
+        draft_context: dict[str, Any] | None,
+    ) -> dict:
+        runtime_context = SecOpsChatService._build_runtime_context(
+            current_user=current_user,
+            report_id=report_id,
+            draft_context=draft_context,
+        )
+        prompt = (
+            "Tu es ASTORIA Guard, un assistant conversationnel generaliste.\n"
+            "Reponds en francais de facon naturelle, claire et utile.\n"
+            "Si un contexte applicatif est fourni, utilise-le seulement s il est pertinent.\n"
+            "N invente pas des faits specifiques si l information manque.\n"
+            "Pas de markdown brut visible.\n\n"
+            f"Contexte optionnel:\n{runtime_context}\n\n"
+            f"Message utilisateur:\n{message}\n"
+        )
+        try:
+            return {"reply": clean_text_response(call_mistral(prompt)), "option_groups": []}
+        except LlmGuardrailBlockedError:
+            raise
+        except LlmServiceBadRequestError:
+            raise
+        except LlmServiceTimeoutError:
+            logger.warning("Timeout Mistral pendant une reponse chatbot general", extra={"http_status": HTTPStatus.GATEWAY_TIMEOUT})
+            return {"reply": "Le chatbot met trop de temps a repondre.", "option_groups": []}
+        except LlmServiceUnavailableError:
+            logger.warning("Service Mistral indisponible pendant une reponse chatbot general", extra={"http_status": HTTPStatus.BAD_GATEWAY})
+            return {"reply": SecOpsChatService.TEMPORARY_UNAVAILABLE_REPLY, "option_groups": []}
+        except Exception:
+            logger.exception("Echec reponse chatbot general")
+            return {"reply": SecOpsChatService.TEMPORARY_UNAVAILABLE_REPLY, "option_groups": []}
+
+    @staticmethod
     def respond(
         *,
         message: str,
         current_user: AuthenticatedUser,
         report_id: str | None = None,
         draft_context: dict[str, Any] | None = None,
+        chat_mode: str | None = None,
         action_id: str | None = None,
         action_payload: dict[str, Any] | None = None,
     ) -> dict:
         action = str(action_id or "").strip().upper()
+        normalized_chat_mode = str(chat_mode or "").strip().lower()
+        force_general_mode = normalized_chat_mode == "normal"
         payload = action_payload or {}
         effective_report_id = str(payload.get("report_id") or report_id or "").strip() or None
         active_question = SecOpsChatService._find_active_question(draft_context)
@@ -683,6 +741,19 @@ class SecOpsChatService:
         if effective_report_id:
             report_row, report_results = SecOpsChatService._load_report_bundle(effective_report_id, current_user)
 
+        if force_general_mode and action == "SHOW_MAIN_MENU":
+            return {
+                "reply": "Mode chat normal active. Posez votre question librement.",
+                "option_groups": [],
+            }
+        if force_general_mode and action == "":
+            return SecOpsChatService._reply_free_prompt(
+                message=message,
+                current_user=current_user,
+                report_id=effective_report_id,
+                draft_context=draft_context,
+                force_general_mode=True,
+            )
         if action in {"", "SHOW_MAIN_MENU"}:
             return SecOpsChatService._build_main_menu(
                 report_id=effective_report_id,
@@ -761,4 +832,5 @@ class SecOpsChatService:
             current_user=current_user,
             report_id=effective_report_id,
             draft_context=draft_context,
+            force_general_mode=force_general_mode,
         )

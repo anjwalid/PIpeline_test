@@ -25,6 +25,7 @@ class SecOpsChatRequest(BaseModel):
     message: str = ""
     report_id: str | None = None
     draft_context: SecOpsChatDraftContext | None = None
+    chat_mode: str | None = None
     action_id: str | None = None
     action_payload: dict = {}
 

@@ -1,0 +1,24 @@
+{
+  "name": "digaramme-dfd",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@xyflow/react": "latest",
+    "html-to-image": "^1.11.13",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "latest",
+    "vite": "6.4.3"
+  }
+}

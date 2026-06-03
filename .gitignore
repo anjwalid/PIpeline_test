@@ -1,15 +1,23 @@
-awb_pfe_project.tar 
+awb_pfe_project.tar
 awb-complet.tar
 project_AWB.tar
-myown_script.sql
-docker-compose.yml
+
+# Secrets
+.env
+*.env
+backend/.env
+frontend/.env
+
+# Local/generated files
+__pycache__/
+*.pyc
 outputs/*
 files/*
+
+# Local docs and scripts
+myown_script.sql
 prompt.md
+prompt1.md
 rapport-leila-saddad-un-assistant-interne-it-1777235402.pdf
 seed_report_results.sql
 sc.ps1
-prompt1.md 
-prompt.md
-docker-compose.yml
-outputs/*
