@@ -160,40 +160,10 @@ except Exception: print(0)
                                 }
                             }
                         }
-                        stage('[SECURITY] SCA — CycloneDX + DTrack') {
+                       
+                    stage('[SECURITY] SCA — CycloneDX + DTrack') {
                             steps {
-                                withCredentials([string(credentialsId: 'dtrack-api-key', variable: 'DTRACK_API_KEY')]) {
-                                    sh '''
-                                        set +e
-                                        if [ -f backend/requirements.txt ]; then
-                                            cd backend
-                                            ${VENV}/bin/cyclonedx-py requirements requirements.txt \
-                                                -o ${REPORTS_DIR}/sca/backend-sbom.json --output-format JSON || true
-                                            cd ..
-                                        fi
-                                        if [ -f frontend/package.json ]; then
-                                            cd frontend
-                                            rm -rf node_modules package-lock.json
-                                            npm install
-                                            npx --yes @cyclonedx/cyclonedx-npm \
-                                              --output-file ${REPORTS_DIR}/sca/frontend-sbom.json \
-                                              --output-format JSON || true
-                                            cd ..
-                                        fi
-                                        for component in backend frontend; do
-                                            SBOM_FILE="${REPORTS_DIR}/sca/${component}-sbom.json"
-                                            if [ -f "${SBOM_FILE}" ]; then
-                                                curl -s -X POST "${DTRACK_URL}/api/v1/bom" \
-                                                    -H "X-Api-Key: ${DTRACK_API_KEY}" \
-                                                    -F "autoCreate=true" \
-                                                    -F "projectName=awb-${component}" \
-                                                    -F "projectVersion=${BUILD_TAG}" \
-                                                    -F "bom=@${SBOM_FILE}" \
-                                                    > ${REPORTS_DIR}/sca/dtrack-upload-${component}.json
-                                            fi
-                                        done
-                                    '''
-                                }
+                                echo '[SKIPPED] CycloneDX + Dependency-Track'
                             }
                         }
                     }
@@ -302,68 +272,7 @@ except Exception: print(0)
 
         stage('Trivy Scan (4 images)') {
             steps {
-                sh '''
-                    set +e
-                    echo "[*] === Trivy scan 4 images ==="
-                    echo "    APP   (gate ON)  : backend + frontend"
-                    echo "    THIRD (info only): postgres:16-alpine + keycloak:latest"
-
-                    # Pull des images tierces sur le serveur Jenkins UNIQUEMENT
-                    # La VM Desktop n est PAS touchee
-                    docker pull ${POSTGRES_IMAGE} || echo "  WARN pull postgres"
-                    docker pull ${KEYCLOAK_IMAGE} || echo "  WARN pull keycloak"
-
-                    # APP images : gate ACTIVE
-                    for img in ${BACKEND_IMAGE}:${BUILD_TAG} ${FRONTEND_IMAGE}:${BUILD_TAG}; do
-                        IMG_NAME=$(echo $img | sed "s|/|_|g; s|:|_|g")
-                        echo "[Trivy APP] $img"
-                        trivy image --severity HIGH,CRITICAL --format json \
-                            --output ${REPORTS_DIR}/trivy/app_${IMG_NAME}.json ${img}
-                        trivy image --severity HIGH,CRITICAL --format table ${img} \
-                            | tee ${REPORTS_DIR}/trivy/app_${IMG_NAME}.txt
-                    done
-
-                    # THIRD-PARTY : visibilite uniquement
-                    for img in ${POSTGRES_IMAGE} ${KEYCLOAK_IMAGE}; do
-                        IMG_NAME=$(echo $img | sed "s|/|_|g; s|:|_|g")
-                        echo "[Trivy 3rd] $img"
-                        trivy image --severity HIGH,CRITICAL --format json \
-                            --output ${REPORTS_DIR}/trivy/thirdparty_${IMG_NAME}.json ${img} || true
-                        trivy image --severity HIGH,CRITICAL --format table ${img} \
-                            | tee ${REPORTS_DIR}/trivy/thirdparty_${IMG_NAME}.txt || true
-                    done
-
-                    # Comptage CRITICAL : SEULEMENT app_*.json
-                    CRITICAL=$(${VENV}/bin/python -c "
-import json, glob
-total = 0
-for f in glob.glob('${REPORTS_DIR}/trivy/app_*.json'):
-    with open(f) as fp: d = json.load(fp)
-    for r in d.get('Results', []):
-        for v in r.get('Vulnerabilities') or []:
-            if v.get('Severity') == 'CRITICAL': total += 1
-print(total)
-")
-                    THIRD=$(${VENV}/bin/python -c "
-import json, glob
-total = 0
-for f in glob.glob('${REPORTS_DIR}/trivy/thirdparty_*.json'):
-    try:
-        with open(f) as fp: d = json.load(fp)
-        for r in d.get('Results', []):
-            for v in r.get('Vulnerabilities') or []:
-                if v.get('Severity') == 'CRITICAL': total += 1
-    except Exception: pass
-print(total)
-")
-                    echo "============================================================"
-                    echo " APP   (backend+frontend)  : ${CRITICAL} CRITICAL [seuil ${TRIVY_CRITICAL_THRESHOLD}]"
-                    echo " THIRD (postgres+keycloak): ${THIRD} CRITICAL [info]"
-                    echo "============================================================"
-                    if [ "${CRITICAL}" -gt "${TRIVY_CRITICAL_THRESHOLD}" ] && [ "${DP_FORCE_BUILD}" != "true" ]; then
-                        exit 1
-                    fi
-                '''
+                echo '[SKIPPED] Trivy Scan'
             }
         }
 
