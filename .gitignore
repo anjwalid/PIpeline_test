@@ -13,6 +13,7 @@ __pycache__/
 *.pyc
 outputs/*
 files/*
+backend/resources/
 
 # Local docs and scripts
 myown_script.sql
