@@ -173,10 +173,11 @@ except Exception: print(0)
                                         fi
                                         if [ -f frontend/package.json ]; then
                                             cd frontend
-                                            [ ! -d node_modules ] && npm ci --silent || true
+                                            rm -rf node_modules package-lock.json
+                                            npm install
                                             npx --yes @cyclonedx/cyclonedx-npm \
-                                                --output-file ${REPORTS_DIR}/sca/frontend-sbom.json \
-                                                --output-format JSON || true
+                                              --output-file ${REPORTS_DIR}/sca/frontend-sbom.json \
+                                              --output-format JSON || true
                                             cd ..
                                         fi
                                         for component in backend frontend; do
