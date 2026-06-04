@@ -21,6 +21,11 @@ class SecOpsChatActionGroup(BaseModel):
     options: list[SecOpsChatActionOption] = []
 
 
+class SecOpsChatHistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
 class SecOpsChatRequest(BaseModel):
     message: str = ""
     report_id: str | None = None
@@ -28,6 +33,10 @@ class SecOpsChatRequest(BaseModel):
     chat_mode: str | None = None
     action_id: str | None = None
     action_payload: dict = {}
+    history: list[SecOpsChatHistoryMessage] = []
+    current_section: str | None = None
+    view_state: str | None = None
+    regulatory_doc_context: str | None = None
 
 
 class SecOpsChatResponse(BaseModel):

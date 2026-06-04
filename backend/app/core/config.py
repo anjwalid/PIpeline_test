@@ -33,6 +33,7 @@ class Settings:
     CVE_SYNC_INITIAL_LOOKBACK_DAYS: int = int(os.getenv("CVE_SYNC_INITIAL_LOOKBACK_DAYS", "7"))
     CVE_SYNC_BATCH_SIZE: int = int(os.getenv("CVE_SYNC_BATCH_SIZE", "250"))
     CVE_SYNC_RESULTS_PER_PAGE: int = int(os.getenv("CVE_SYNC_RESULTS_PER_PAGE", "2000"))
+    QDRANT_URL: str = os.getenv("QDRANT_URL", "")
     MISTRAL_API_KEY: str = os.getenv("MISTRAL_API_KEY", "")
     MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-medium-latest")
     MISTRAL_TIMEOUT_MS: int = int(os.getenv("MISTRAL_TIMEOUT_MS", "90000"))
@@ -113,5 +114,17 @@ class Settings:
     ADMIN_RATE_LIMIT_WINDOW_SECONDS: int = int(
         os.getenv("ADMIN_RATE_LIMIT_WINDOW_SECONDS", "60")
     )
+    DFD_STUDIO_RENDER_ENABLED: bool = _parse_bool_env(
+        os.getenv("DFD_STUDIO_RENDER_ENABLED"),
+        default=True,
+    )
+    DFD_STUDIO_RENDER_URL: str = os.getenv(
+        "DFD_STUDIO_RENDER_URL",
+        "http://localhost:5173/dfd-render",
+    ).strip()
+    DFD_STUDIO_RENDER_TIMEOUT_MS: int = int(
+        os.getenv("DFD_STUDIO_RENDER_TIMEOUT_MS", "45000")
+    )
+    DFD_STUDIO_BROWSER_PATH: str = os.getenv("DFD_STUDIO_BROWSER_PATH", "").strip()
 
 settings = Settings()

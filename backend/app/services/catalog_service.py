@@ -62,6 +62,18 @@ class CatalogService:
         return CatalogRepository.delete_threat(threat_id)
 
     @staticmethod
+    def get_framework_mapping(threat_id: int):
+        return CatalogRepository.get_framework_mapping(threat_id)
+
+    @staticmethod
+    def list_all_framework_mappings():
+        return CatalogRepository.list_all_framework_mappings()
+
+    @staticmethod
+    def upsert_framework_mapping(threat_id: int, payload: Dict[str, Any]):
+        return CatalogRepository.upsert_framework_mapping(threat_id, payload)
+
+    @staticmethod
     def trigger_catalog_refresh():
         return {
             "status": "pending",

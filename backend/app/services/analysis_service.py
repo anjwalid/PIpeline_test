@@ -11,7 +11,7 @@ from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.questionnaire_repository import QuestionnaireRepository
 from app.services.audit_service import AuditService
 from app.services.cve_enrichment_service import CveEnrichmentService
-from app.services.dfd_generator import generate_dfd_with_pytm
+from app.services.dfd_render_service import DfdRenderService
 from app.services.llm_feedback_service import LlmFeedbackService
 from app.services.llm_clients import (
     call_gemini,
@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 class AnalysisService:
     _latest_report_path: str | None = None
     _latest_dfd_path: str | None = None
+    _latest_dfd_json: dict | None = None
     _latest_report_owner_id: uuid.UUID | None = None
     _latest_dfd_owner_id: uuid.UUID | None = None
     _MATCHING_STOPWORDS = {
@@ -758,17 +759,16 @@ class AnalysisService:
 
             try:
                 dfd_output_dir = Path(__file__).resolve().parents[2] / "resources" / "out" / "diagrams"
-                dfd_image_path = generate_dfd_with_pytm(dfd_json, str(dfd_output_dir))
-                AnalysisService._latest_dfd_path = dfd_image_path
+                dfd_image_path = DfdRenderService.render_with_fallback(dfd_json, str(dfd_output_dir))
                 AnalysisService._latest_dfd_owner_id = generated_by.user_id
                 logger.info("DFD genere: analysis_id=%s path=%s", analysis_id, dfd_image_path)
             except Exception as exc:
-                logger.exception("Echec rendu DFD")
-                raise AnalysisStepError(
-                    "dfd_render",
-                    "La generation du diagramme DFD a echoue.",
-                    cause=exc,
-                ) from exc
+                dfd_image_path = None
+                AnalysisService._latest_dfd_owner_id = generated_by.user_id
+                logger.warning("Echec rendu DFD via pytm, fallback JSON uniquement.", exc_info=exc)
+
+            AnalysisService._latest_dfd_path = dfd_image_path
+            AnalysisService._latest_dfd_json = dfd_json
 
             try:
                 catalog_threats = CatalogRepository.list_threats_for_analysis()
@@ -890,6 +890,7 @@ class AnalysisService:
                 developer_name=analyst_name,
                 application_description=generated_description,
                 selected_threats=selected_threats,
+                dfd_json=dfd_json,
                 dfd_image_path=dfd_image_path,
                 dfd_reference="DFD-01",
                 file_name=report.file_name,
@@ -929,7 +930,8 @@ class AnalysisService:
                 "status": "success",
                 "report_id": report.id,
                 "report_url": report.report_url,
-                "dfd_image_url": "/download-dfd",
+                "dfd_image_url": "/download-dfd" if dfd_image_path else None,
+                "dfd_json": dfd_json,
                 "application_description": generated_description,
                 "threat_count": len(selected_threats),
             }
@@ -971,6 +973,10 @@ class AnalysisService:
     @staticmethod
     def get_latest_dfd_path() -> str | None:
         return AnalysisService._latest_dfd_path
+
+    @staticmethod
+    def get_latest_dfd_json() -> dict | None:
+        return AnalysisService._latest_dfd_json
 
     @staticmethod
     def get_latest_report_owner_id() -> uuid.UUID | None:

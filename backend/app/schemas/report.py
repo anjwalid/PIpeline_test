@@ -3,6 +3,14 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class DfdJsonPayload(BaseModel):
+    boundaries: list[dict] = Field(default_factory=list)
+    external_entities: list[dict] = Field(default_factory=list)
+    processes: list[dict] = Field(default_factory=list)
+    data_stores: list[dict] = Field(default_factory=list)
+    data_flows: list[dict] = Field(default_factory=list)
+
+
 class ReportAnnotationResponse(BaseModel):
     id: str
     annotation: str
@@ -89,6 +97,7 @@ class ReportResultVersionResponse(BaseModel):
     developer_name: str
     application_description: str
     selected_threats: list[EditableThreat] = Field(default_factory=list)
+    dfd_json: DfdJsonPayload = Field(default_factory=DfdJsonPayload)
     dfd_image_path: str | None = None
     dfd_reference: str | None = None
     download_url: str | None = None
@@ -106,6 +115,7 @@ class ReportResultsResponse(BaseModel):
     version_number: int
     application_version: str
     selected_threats: list[EditableThreat] = Field(default_factory=list)
+    dfd_json: DfdJsonPayload = Field(default_factory=DfdJsonPayload)
     dfd_image_path: str | None = None
     dfd_reference: str | None = None
     updated_at: datetime | None = None
@@ -117,6 +127,7 @@ class ReportResultsUpdateRequest(BaseModel):
     developer_name: str
     application_description: str
     selected_threats: list[EditableThreat]
+    dfd_json: DfdJsonPayload = Field(default_factory=DfdJsonPayload)
     dfd_image_path: str | None = None
     dfd_reference: str | None = None
     modification_reasons: list[SecOpsModificationReason] = Field(default_factory=list)

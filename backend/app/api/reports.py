@@ -83,6 +83,7 @@ def update_report_results(
         developer_name=payload.developer_name,
         application_description=payload.application_description,
         selected_threats=payload.selected_threats,
+        dfd_json=payload.dfd_json.model_dump(),
         dfd_image_path=payload.dfd_image_path,
         dfd_reference=payload.dfd_reference,
         actor=current_user,

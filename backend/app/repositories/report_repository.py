@@ -71,6 +71,7 @@ class ReportRepository:
                         developer_name TEXT NOT NULL,
                         application_description TEXT NOT NULL,
                         selected_threats JSONB NOT NULL,
+                        dfd_json JSONB NOT NULL DEFAULT '{}'::jsonb,
                         dfd_image_path TEXT,
                         dfd_reference TEXT DEFAULT 'DFD-01',
                         version_number INTEGER NOT NULL DEFAULT 1,
@@ -80,6 +81,12 @@ class ReportRepository:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE report_results
+                    ADD COLUMN IF NOT EXISTS dfd_json JSONB NOT NULL DEFAULT '{}'::jsonb
                     """
                 )
                 cur.execute(
@@ -107,6 +114,7 @@ class ReportRepository:
                         developer_name TEXT NOT NULL,
                         application_description TEXT NOT NULL,
                         selected_threats JSONB NOT NULL,
+                        dfd_json JSONB NOT NULL DEFAULT '{}'::jsonb,
                         dfd_image_path TEXT,
                         dfd_reference TEXT,
                         file_name TEXT,
@@ -121,6 +129,12 @@ class ReportRepository:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         CONSTRAINT uq_report_result_versions UNIQUE (report_id, version_number)
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE report_result_versions
+                    ADD COLUMN IF NOT EXISTS dfd_json JSONB NOT NULL DEFAULT '{}'::jsonb
                     """
                 )
                 cur.execute(
@@ -232,6 +246,7 @@ class ReportRepository:
         developer_name: str,
         application_description: str,
         selected_threats: list[dict],
+        dfd_json: dict,
         dfd_image_path: str | None,
         dfd_reference: str | None,
         version_number: int,
@@ -248,6 +263,7 @@ class ReportRepository:
                         developer_name,
                         application_description,
                         selected_threats,
+                        dfd_json,
                         dfd_image_path,
                         dfd_reference,
                         version_number,
@@ -255,13 +271,14 @@ class ReportRepository:
                         created_by_username,
                         created_by_email
                     )
-                    VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (report_id)
                     DO UPDATE SET
                         app_name = EXCLUDED.app_name,
                         developer_name = EXCLUDED.developer_name,
                         application_description = EXCLUDED.application_description,
                         selected_threats = EXCLUDED.selected_threats,
+                        dfd_json = EXCLUDED.dfd_json,
                         dfd_image_path = EXCLUDED.dfd_image_path,
                         dfd_reference = EXCLUDED.dfd_reference,
                         version_number = EXCLUDED.version_number,
@@ -277,6 +294,7 @@ class ReportRepository:
                         developer_name,
                         application_description,
                         json.dumps(selected_threats, ensure_ascii=False),
+                        json.dumps(dfd_json, ensure_ascii=False),
                         dfd_image_path,
                         dfd_reference,
                         version_number,
@@ -357,6 +375,7 @@ class ReportRepository:
         developer_name: str,
         application_description: str,
         selected_threats: list[dict],
+        dfd_json: dict,
         dfd_image_path: str | None,
         dfd_reference: str | None,
         version_number: int,
@@ -371,6 +390,7 @@ class ReportRepository:
                         developer_name = %s,
                         application_description = %s,
                         selected_threats = %s::jsonb,
+                        dfd_json = %s::jsonb,
                         dfd_image_path = %s,
                         dfd_reference = %s,
                         version_number = %s,
@@ -383,6 +403,7 @@ class ReportRepository:
                         developer_name,
                         application_description,
                         json.dumps(selected_threats, ensure_ascii=False),
+                        json.dumps(dfd_json, ensure_ascii=False),
                         dfd_image_path,
                         dfd_reference,
                         version_number,
@@ -404,6 +425,7 @@ class ReportRepository:
         developer_name: str,
         application_description: str,
         selected_threats: list[dict],
+        dfd_json: dict,
         dfd_image_path: str | None,
         dfd_reference: str | None,
         file_name: str | None,
@@ -427,6 +449,7 @@ class ReportRepository:
                         developer_name,
                         application_description,
                         selected_threats,
+                        dfd_json,
                         dfd_image_path,
                         dfd_reference,
                         file_name,
@@ -439,7 +462,7 @@ class ReportRepository:
                         created_by_email,
                         change_reason
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (report_id, version_number) DO NOTHING
                     """,
                     (
@@ -450,6 +473,7 @@ class ReportRepository:
                         developer_name,
                         application_description,
                         json.dumps(selected_threats, ensure_ascii=False),
+                        json.dumps(dfd_json, ensure_ascii=False),
                         dfd_image_path,
                         dfd_reference,
                         file_name,

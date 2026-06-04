@@ -36,6 +36,7 @@ from app.schemas.report import (
 )
 from app.services.llm_feedback_service import LlmFeedbackService
 from app.services.audit_service import AuditService
+from app.services.dfd_render_service import DfdRenderService
 from app.services.minio_service import MinioService
 from app.services.report_service import build_safe_slug, generate_report_pdf
 
@@ -82,6 +83,13 @@ class ReportManagementService:
     }
     SECOPS_ROLE = "secops_engineer"
     MANAGER_ROLE = "manager"
+    _DFD_JSON_KEYS = (
+        "boundaries",
+        "external_entities",
+        "processes",
+        "data_stores",
+        "data_flows",
+    )
 
     @staticmethod
     def _normalize_text(value: str | None) -> str:
@@ -399,6 +407,43 @@ class ReportManagementService:
         return text or ReportManagementService.DEFAULT_DFD_REFERENCE
 
     @staticmethod
+    def _empty_dfd_json() -> dict:
+        return {key: [] for key in ReportManagementService._DFD_JSON_KEYS}
+
+    @staticmethod
+    def _normalize_dfd_json(value: dict | None) -> dict:
+        normalized = ReportManagementService._empty_dfd_json()
+        if not isinstance(value, dict):
+            return normalized
+
+        for key in ReportManagementService._DFD_JSON_KEYS:
+            items = value.get(key)
+            if isinstance(items, list):
+                normalized[key] = [item for item in items if isinstance(item, dict)]
+        return normalized
+
+    @staticmethod
+    def _render_fallback_dfd_image(
+        *,
+        dfd_json: dict,
+        output_subdir: str,
+    ) -> str | None:
+        normalized_dfd_json = ReportManagementService._normalize_dfd_json(dfd_json)
+        has_content = any(normalized_dfd_json.get(key) for key in ReportManagementService._DFD_JSON_KEYS)
+        if not has_content:
+            return None
+
+        output_dir = Path(__file__).resolve().parents[2] / "resources" / "out" / output_subdir
+        try:
+            return DfdRenderService.render_with_fallback(
+                normalized_dfd_json,
+                str(output_dir),
+            )
+        except Exception:
+            logger.warning("Rendu automatique du DFD impossible.", exc_info=True)
+            return None
+
+    @staticmethod
     def _archive_dfd_asset(
         *,
         report_id: str,
@@ -504,6 +549,7 @@ class ReportManagementService:
         developer_name: str,
         application_description: str,
         selected_threats: list[dict],
+        dfd_json: dict,
         dfd_image_path: str | None,
         dfd_reference: str,
     ) -> bool:
@@ -513,6 +559,7 @@ class ReportManagementService:
                 (current_row.get("developer_name") or "") != developer_name,
                 (current_row.get("application_description") or "") != application_description,
                 (current_row.get("selected_threats") or []) != selected_threats,
+                ReportManagementService._normalize_dfd_json(current_row.get("dfd_json")) != dfd_json,
                 (current_row.get("dfd_image_path") or None) != dfd_image_path,
                 ReportManagementService._normalize_dfd_reference(current_row.get("dfd_reference"))
                 != dfd_reference,
@@ -522,6 +569,7 @@ class ReportManagementService:
     @staticmethod
     def _serialize_report_results(report_results_row: dict) -> ReportResultsResponse:
         selected_threats = report_results_row.get("selected_threats") or []
+        dfd_json = ReportManagementService._normalize_dfd_json(report_results_row.get("dfd_json"))
         normalized = ReportManagementService._normalize_selected_threats(selected_threats)
         version_history_rows = ReportRepository.get_report_result_versions(
             str(report_results_row["report_id"])
@@ -539,6 +587,7 @@ class ReportManagementService:
                         version_row.get("selected_threats") or []
                     )
                 ],
+                dfd_json=ReportManagementService._normalize_dfd_json(version_row.get("dfd_json")),
                 dfd_image_path=version_row.get("dfd_image_path"),
                 dfd_reference=ReportManagementService._normalize_dfd_reference(
                     version_row.get("dfd_reference")
@@ -565,6 +614,7 @@ class ReportManagementService:
                 report_results_row.get("version_number")
             ),
             selected_threats=[EditableThreat(**item) for item in normalized],
+            dfd_json=dfd_json,
             dfd_image_path=report_results_row.get("dfd_image_path"),
             dfd_reference=ReportManagementService._normalize_dfd_reference(
                 report_results_row.get("dfd_reference")
@@ -581,6 +631,7 @@ class ReportManagementService:
         developer_name: str,
         application_description: str,
         selected_threats: list[dict],
+        dfd_json: dict | None,
         dfd_image_path: str | None,
         dfd_reference: str | None,
         file_name: str | None,
@@ -591,11 +642,16 @@ class ReportManagementService:
         generated_by: AuthenticatedUser,
     ) -> ReportResultsResponse:
         normalized_threats = ReportManagementService._normalize_selected_threats(selected_threats)
+        normalized_dfd_json = ReportManagementService._normalize_dfd_json(dfd_json)
         normalized_dfd_reference = ReportManagementService._normalize_dfd_reference(dfd_reference)
+        fallback_dfd_image_path = dfd_image_path or ReportManagementService._render_fallback_dfd_image(
+            dfd_json=normalized_dfd_json,
+            output_subdir=f"diagrams\\{report_id}",
+        )
         archived_dfd_image_path = ReportManagementService._archive_dfd_asset(
             report_id=report_id,
             version_number=1,
-            dfd_image_path=dfd_image_path,
+            dfd_image_path=fallback_dfd_image_path,
         )
         row = ReportRepository.upsert_report_results(
             report_id=report_id,
@@ -604,6 +660,7 @@ class ReportManagementService:
             application_description=(application_description or "").strip()
             or ReportManagementService.DEFAULT_DESCRIPTION,
             selected_threats=normalized_threats,
+            dfd_json=normalized_dfd_json,
             dfd_image_path=archived_dfd_image_path,
             dfd_reference=normalized_dfd_reference,
             version_number=1,
@@ -616,6 +673,7 @@ class ReportManagementService:
             developer_name=row["developer_name"],
             application_description=row["application_description"],
             selected_threats=normalized_threats,
+            dfd_json=normalized_dfd_json,
             dfd_image_path=row.get("dfd_image_path"),
             dfd_reference=normalized_dfd_reference,
             file_name=file_name,
@@ -672,6 +730,7 @@ class ReportManagementService:
         developer_name: str,
         application_description: str,
         selected_threats: list[EditableThreat],
+        dfd_json: dict,
         dfd_image_path: str | None,
         dfd_reference: str | None,
         actor: AuthenticatedUser,
@@ -690,6 +749,7 @@ class ReportManagementService:
         ReportManagementService._ensure_editable_status(report_row)
 
         normalized = ReportManagementService._normalize_selected_threats(selected_threats)
+        normalized_dfd_json = ReportManagementService._normalize_dfd_json(dfd_json)
         if not normalized:
             raise HTTPException(
                 status_code=400,
@@ -709,6 +769,10 @@ class ReportManagementService:
         next_dfd_image_path = (dfd_image_path or "").strip() or None
         next_dfd_reference = ReportManagementService._normalize_dfd_reference(dfd_reference)
         next_version_number = int(existing.get("version_number") or 1) + 1
+        next_dfd_image_path = next_dfd_image_path or ReportManagementService._render_fallback_dfd_image(
+            dfd_json=normalized_dfd_json,
+            output_subdir=f"diagrams\\{report_id}",
+        )
         archived_dfd_image_path = ReportManagementService._archive_dfd_asset(
             report_id=report_id,
             version_number=next_version_number,
@@ -721,6 +785,7 @@ class ReportManagementService:
             developer_name=next_developer_name,
             application_description=next_description,
             selected_threats=normalized,
+            dfd_json=normalized_dfd_json,
             dfd_image_path=archived_dfd_image_path,
             dfd_reference=next_dfd_reference,
         ):
@@ -747,6 +812,7 @@ class ReportManagementService:
             developer_name=next_developer_name,
             application_description=next_description,
             selected_threats=normalized,
+            dfd_json=normalized_dfd_json,
             dfd_image_path=archived_dfd_image_path,
             dfd_reference=next_dfd_reference,
             version_number=next_version_number,
@@ -764,6 +830,7 @@ class ReportManagementService:
             developer_name=next_developer_name,
             application_description=next_description,
             selected_threats=normalized,
+            dfd_json=normalized_dfd_json,
             dfd_image_path=archived_dfd_image_path,
             dfd_reference=next_dfd_reference,
             file_name=None,
@@ -859,6 +926,7 @@ class ReportManagementService:
             or report_row.get("description")
             or ReportManagementService.DEFAULT_DESCRIPTION
         ).strip()
+        dfd_json = ReportManagementService._normalize_dfd_json(editable_results.get("dfd_json"))
 
         regen_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         report_file_name = (
@@ -868,6 +936,10 @@ class ReportManagementService:
         )
 
         dfd_image_path = (editable_results.get("dfd_image_path") or "").strip() or None
+        dfd_image_path = dfd_image_path or ReportManagementService._render_fallback_dfd_image(
+            dfd_json=dfd_json,
+            output_subdir=f"diagrams\\{report_id}",
+        )
         dfd_reference = ReportManagementService._normalize_dfd_reference(
             editable_results.get("dfd_reference")
         )
@@ -926,6 +998,7 @@ class ReportManagementService:
             developer_name=developer_name,
             application_description=description,
             selected_threats=selected_threats,
+            dfd_json=dfd_json,
             dfd_image_path=dfd_image_path,
             dfd_reference=dfd_reference,
             version_number=int(editable_results.get("version_number") or 1),
@@ -1201,7 +1274,12 @@ class ReportManagementService:
                 or report_row.get("description")
                 or ReportManagementService.DEFAULT_DESCRIPTION
             ).strip()
+            dfd_json = ReportManagementService._normalize_dfd_json(target_version.get("dfd_json"))
             original_dfd_image_path = (target_version.get("dfd_image_path") or "").strip() or None
+            original_dfd_image_path = original_dfd_image_path or ReportManagementService._render_fallback_dfd_image(
+                dfd_json=dfd_json,
+                output_subdir=f"diagrams\\{report_id}",
+            )
             dfd_image_path = ReportManagementService._archive_dfd_asset(
                 report_id=report_id,
                 version_number=version_number,

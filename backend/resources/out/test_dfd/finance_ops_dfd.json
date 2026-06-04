@@ -1,0 +1,152 @@
+{
+  "boundaries": [
+    {
+      "name": "INTERNET",
+      "layout": {
+        "x": 160,
+        "y": -40,
+        "width": 240,
+        "height": 520,
+        "rotate": 90,
+        "curve": 0.5,
+        "strokeWidth": 5,
+        "dashLength": 14,
+        "dashGap": 12
+      }
+    },
+    {
+      "name": "INTERNE",
+      "layout": {
+        "x": 1030,
+        "y": -110,
+        "width": 240,
+        "height": 600,
+        "rotate": 90,
+        "curve": 0.5,
+        "strokeWidth": 5,
+        "dashLength": 14,
+        "dashGap": 12
+      }
+    }
+  ],
+  "external_entities": [
+    {
+      "name": "client mobile",
+      "boundary": "INTERNET",
+      "layout": {
+        "x": 80,
+        "y": 120,
+        "width": 150,
+        "height": 76
+      }
+    },
+    {
+      "name": "partenaire bancaire",
+      "boundary": "INTERNET",
+      "layout": {
+        "x": 80,
+        "y": 280,
+        "width": 150,
+        "height": 76
+      }
+    }
+  ],
+  "processes": [
+    {
+      "name": "api gateway",
+      "boundary": "",
+      "layout": {
+        "x": 420,
+        "y": 120,
+        "width": 118,
+        "height": 118
+      }
+    },
+    {
+      "name": "service paiement",
+      "boundary": "INTERNE",
+      "layout": {
+        "x": 720,
+        "y": 100,
+        "width": 118,
+        "height": 118
+      }
+    },
+    {
+      "name": "service fraude",
+      "boundary": "INTERNE",
+      "layout": {
+        "x": 720,
+        "y": 290,
+        "width": 118,
+        "height": 118
+      }
+    }
+  ],
+  "data_stores": [
+    {
+      "name": "postgres transactions",
+      "boundary": "INTERNE",
+      "layout": {
+        "x": 1120,
+        "y": 90,
+        "width": 180,
+        "height": 86
+      }
+    },
+    {
+      "name": "journal audit",
+      "boundary": "INTERNE",
+      "layout": {
+        "x": 1120,
+        "y": 260,
+        "width": 180,
+        "height": 86
+      }
+    }
+  ],
+  "data_flows": [
+    {
+      "source": "client mobile",
+      "target": "api gateway",
+      "label": "requete paiement",
+      "source_handle": "right-source",
+      "target_handle": "left-target"
+    },
+    {
+      "source": "api gateway",
+      "target": "service paiement",
+      "label": "ordre de paiement",
+      "source_handle": "right-source",
+      "target_handle": "left-target"
+    },
+    {
+      "source": "partenaire bancaire",
+      "target": "service paiement",
+      "label": "confirmation bancaire",
+      "source_handle": "right-source",
+      "target_handle": "left-target"
+    },
+    {
+      "source": "service paiement",
+      "target": "service fraude",
+      "label": "analyse transaction",
+      "source_handle": "bottom-source",
+      "target_handle": "top-target"
+    },
+    {
+      "source": "service paiement",
+      "target": "postgres transactions",
+      "label": "transaction",
+      "source_handle": "right-source",
+      "target_handle": "left-target"
+    },
+    {
+      "source": "service fraude",
+      "target": "journal audit",
+      "label": "evenement fraude",
+      "source_handle": "right-source",
+      "target_handle": "left-target"
+    }
+  ]
+}

@@ -8,13 +8,11 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.core.auth import AuthenticatedUser, user_has_role
-from app.core.config import settings
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.questionnaire_repository import QuestionnaireRepository
 from app.repositories.report_repository import ReportRepository
 from app.services.llm_clients import (
-    LlmServiceBadRequestError,
     LlmGuardrailBlockedError,
     LlmServiceTimeoutError,
     LlmServiceUnavailableError,
@@ -34,12 +32,23 @@ class SecOpsChatService:
         "risque", "risques", "security", "sécurité", "auth", "authentification",
         "questionnaire", "question", "option", "options", "choix", "expliquer",
         "explique", "comprendre", "rapport", "report", "application", "architecture",
+        "commencer", "démarrer", "lancer", "nouvelle", "analyser", "analyse",
+        "historique", "dashboard", "tableau", "naviguer", "accéder", "trouver",
+        "aide", "guide", "comment", "utiliser", "faire",
     }
+
+    GUIDE_ANALYSIS_KEYWORDS = {"commencer", "demarrer", "lancer", "nouvelle analyse", "comment analyser", "faire une analyse", "comment faire"}
+    GUIDE_HISTORY_KEYWORDS = {"historique", "mes rapports", "voir mes analyses", "rapports precedents"}
+    TOUR_KEYWORDS = {"guide complet", "tout montrer", "montre-moi tout", "tutoriel", "premiers pas", "je suis nouveau", "apprends-moi", "tour"}
+    GUIDE_DASHBOARD_KEYWORDS = {"dashboard", "tableau de bord", "accueil", "page principale"}
     TEMPORARY_UNAVAILABLE_REPLY = (
         "Le service SecOps est temporairement indisponible. Merci de reessayer."
     )
     OUT_OF_SCOPE_REPLY = (
         "Je suis limite au contexte SecOps: questionnaire, rapport, menaces, mitigations et DFD."
+    )
+    GUARDRAIL_BLOCKED_REPLY = (
+        "Cette demande ne peut pas etre traitee en raison des politiques de securite."
     )
 
     @staticmethod
@@ -48,8 +57,6 @@ class SecOpsChatService:
 
     @staticmethod
     def _is_in_scope(message: str) -> bool:
-        if not settings.SECOPS_CHAT_REQUIRE_SCOPE_ALLOWLIST:
-            return True
         normalized = (message or "").casefold()
         return any(keyword in normalized for keyword in SecOpsChatService.ALLOWED_KEYWORDS)
 
@@ -217,19 +224,15 @@ class SecOpsChatService:
 
     @staticmethod
     def _reply_question_explain(active_question: dict[str, Any]) -> dict:
-        label = str(active_question.get("label") or "Cette question").strip()
         aide = str(active_question.get("aide") or active_question.get("help_text") or "").strip()
-        question_type = str(active_question.get("question_type") or "").strip()
-        reply = f"{label}. {aide}" if aide else f"{label}. Cette question sert a qualifier le contexte securite."
-        if question_type:
-            reply += f" Type attendu: {question_type}."
+        label = str(active_question.get("label") or "Cette question").strip()
+        reply = aide if aide else f"{label} — Cette question sert a qualifier le contexte securite."
         return {"reply": reply, "option_groups": []}
 
     @staticmethod
     def _reply_questionnaire_question_explain(question: dict[str, Any]) -> dict:
-        label = str(question.get("label") or "Cette question").strip()
         aide = str(question.get("aide") or question.get("help_text") or "").strip()
-        question_type = str(question.get("question_type") or "").strip()
+        label = str(question.get("label") or "Cette question").strip()
         visible_options = question.get("options") or []
 
         groups: list[dict] = []
@@ -253,9 +256,7 @@ class SecOpsChatService:
                 )
             )
 
-        reply = f"{label}. {aide}" if aide else f"{label}. Cette question sert a qualifier le contexte."
-        if question_type:
-          reply += f" Type: {question_type}."
+        reply = aide if aide else f"{label} — Cette question sert a qualifier le contexte de securite."
         return {"reply": reply, "option_groups": groups}
 
     @staticmethod
@@ -423,7 +424,7 @@ class SecOpsChatService:
                 )
             )
         return {
-            "reply": f"Rapport {app_name} charge. Choisissez ce que vous voulez comprendre.",
+            "reply": f"Rapport \"{app_name}\" chargé. Choisissez ce que vous voulez comprendre.",
             "option_groups": groups,
         }
 
@@ -586,14 +587,39 @@ class SecOpsChatService:
             indent=2,
         )
 
+    SECTION_LABELS: dict[str, str] = {
+        "dashboard": "Tableau de bord",
+        "analysis": "Nouvelle analyse",
+        "history": "Historique des rapports",
+    }
+
+    VIEW_STATE_LABELS: dict[str, str] = {
+        "form": "Remplissage du questionnaire",
+        "loading": "Analyse en cours de traitement",
+        "report": "Consultation du rapport genere",
+        "report_editor": "Edition des resultats du rapport",
+        "error": "Erreur lors de l'analyse",
+    }
+
     @staticmethod
     def _build_runtime_context(
         *,
         current_user: AuthenticatedUser,
         report_id: str | None,
         draft_context: dict[str, Any] | None,
+        current_section: str | None = None,
+        view_state: str | None = None,
     ) -> str:
         sections: list[str] = []
+
+        if current_section:
+            label = SecOpsChatService.SECTION_LABELS.get(current_section, current_section)
+            sections.append(f"Section active: {label}")
+
+        if view_state:
+            label = SecOpsChatService.VIEW_STATE_LABELS.get(view_state, view_state)
+            sections.append(f"Etat de la vue: {label}")
+
         if report_id:
             report_row, report_results = SecOpsChatService._load_report_bundle(report_id, current_user)
             sections.append(
@@ -609,13 +635,186 @@ class SecOpsChatService:
         return "\n".join(sections)
 
     @staticmethod
+    def _reply_tour_menu() -> dict:
+        return {
+            "reply": "Je peux vous guider pas à pas. Choisissez un guide :",
+            "option_groups": [
+                SecOpsChatService._group(
+                    "Guides disponibles",
+                    [
+                        SecOpsChatService._option("TOUR_ANALYSE", "Faire une nouvelle analyse"),
+                        SecOpsChatService._option("TOUR_HISTORY", "Consulter l'historique"),
+                        SecOpsChatService._option("TOUR_DASHBOARD", "Comprendre le Dashboard"),
+                    ],
+                )
+            ],
+        }
+
+    @staticmethod
+    def _detect_tour_intent(message: str) -> bool:
+        lowered = message.casefold()
+        return any(kw in lowered for kw in SecOpsChatService.TOUR_KEYWORDS)
+
+    @staticmethod
+    def _detect_guide_target(message: str) -> str | None:
+        lowered = message.casefold()
+        if any(kw in lowered for kw in SecOpsChatService.GUIDE_ANALYSIS_KEYWORDS):
+            return "analysis"
+        if any(kw in lowered for kw in SecOpsChatService.GUIDE_HISTORY_KEYWORDS):
+            return "history"
+        if any(kw in lowered for kw in SecOpsChatService.GUIDE_DASHBOARD_KEYWORDS):
+            return "dashboard"
+        return None
+
+    @staticmethod
+    def _reply_guide(target: str) -> dict:
+        guides = {
+            "analysis": (
+                "Pour lancer une nouvelle analyse, ouvre le menu de navigation et clique sur \"Nouvelle analyse\". "
+                "Tu pourras ensuite remplir le questionnaire décrivant ton application.",
+                "GUIDE_HIGHLIGHT_ANALYSIS",
+                "Me montrer Nouvelle analyse",
+            ),
+            "history": (
+                "L'historique de tes rapports est accessible via le menu de navigation, section \"Historique\". "
+                "Tu y retrouves tous tes rapports générés avec leur statut.",
+                "GUIDE_HIGHLIGHT_HISTORY",
+                "Me montrer l'Historique",
+            ),
+            "dashboard": (
+                "Le tableau de bord est la page d'accueil de l'application. "
+                "Tu peux y accéder via le menu de navigation, section \"Dashboard\".",
+                "GUIDE_HIGHLIGHT_DASHBOARD",
+                "Me montrer le Dashboard",
+            ),
+        }
+        reply_text, action_id, label = guides.get(target, guides["analysis"])
+        return {
+            "reply": reply_text,
+            "option_groups": [
+                SecOpsChatService._group(
+                    "Navigation guidée",
+                    [SecOpsChatService._option(action_id, label)],
+                )
+            ],
+        }
+
+    @staticmethod
+    def _build_faq_response(faq: dict) -> dict:
+        answer = faq.get("answer", "")
+        action_id = faq.get("action_id")
+        action_label = faq.get("action_label")
+
+        if action_id == "SHOW_TOURS":
+            return {
+                "reply": answer,
+                "option_groups": [
+                    SecOpsChatService._group(
+                        "Guides disponibles",
+                        [
+                            SecOpsChatService._option("TOUR_ANALYSE", "Faire une nouvelle analyse"),
+                            SecOpsChatService._option("TOUR_HISTORY", "Consulter l'historique"),
+                            SecOpsChatService._option("TOUR_DASHBOARD", "Comprendre le Dashboard"),
+                        ],
+                    )
+                ],
+            }
+        if action_id:
+            return {
+                "reply": answer,
+                "option_groups": [
+                    SecOpsChatService._group(
+                        "Guide interactif",
+                        [SecOpsChatService._option(action_id, action_label or "Me montrer")],
+                    )
+                ],
+            }
+        return {"reply": answer, "option_groups": []}
+
+    @staticmethod
+    def _format_history(history: list[dict]) -> str:
+        if not history:
+            return ""
+        lines = ["Historique de la conversation (contexte):"]
+        for msg in history[-6:]:
+            role = "Utilisateur" if msg.get("role") == "user" else "Assistant"
+            lines.append(f"{role}: {str(msg.get('content') or '').strip()}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _reply_regulatory_menu() -> dict:
+        from app.services.regulatory_service import list_documents
+        docs = [d for d in list_documents() if d.get("status") == "indexed"]
+        if not docs:
+            return {
+                "reply": "Aucun document reglementaire n'est encore disponible. L'administrateur doit d'abord en uploader dans la section 'Base reglementaire'.",
+                "option_groups": [],
+            }
+        return {
+            "reply": "Voici les documents reglementaires disponibles. Sur lequel souhaitez-vous des informations ?",
+            "option_groups": [
+                SecOpsChatService._group(
+                    "Documents disponibles",
+                    [
+                        SecOpsChatService._option(
+                            "REGULATORY_DOC_QUERY",
+                            str(doc["display_name"]),
+                            {"doc_name": str(doc["display_name"]), "doc_id": doc["id"]},
+                        )
+                        for doc in docs[:10]
+                    ],
+                )
+            ],
+        }
+
+    @staticmethod
+    def _reply_regulatory_doc_entry(doc_name: str, doc_id: Any) -> dict:
+        if not doc_name:
+            return {"reply": "Document introuvable.", "option_groups": []}
+
+        shortcuts: list[str] = []
+        if doc_id:
+            try:
+                from app.services.regulatory_service import list_documents
+                docs = list_documents()
+                doc = next((d for d in docs if d["id"] == int(doc_id)), None)
+                if doc:
+                    raw = doc.get("shortcuts") or []
+                    shortcuts = raw if isinstance(raw, list) else []
+            except Exception:
+                pass
+
+        if not shortcuts:
+            shortcuts = ["Vue d'ensemble", "Principales obligations", "Sanctions", "Comment se conformer"]
+
+        return {
+            "reply": f"Bonjour ! Alors dis-moi, qu'est-ce que tu veux savoir sur {doc_name} ?",
+            "option_groups": [
+                SecOpsChatService._group(
+                    f"Questions sur {doc_name}",
+                    [
+                        SecOpsChatService._option(
+                            "REGULATORY_DOC_CUSTOM_QUERY",
+                            shortcut,
+                            {"doc_name": doc_name, "doc_id": doc_id, "question": shortcut},
+                        )
+                        for shortcut in shortcuts
+                    ],
+                )
+            ],
+        }
+
+    @staticmethod
     def _reply_free_prompt(
         *,
         message: str,
         current_user: AuthenticatedUser,
         report_id: str | None,
         draft_context: dict[str, Any] | None,
-        force_general_mode: bool = False,
+        history: list[dict] | None = None,
+        current_section: str | None = None,
+        view_state: str | None = None,
+        regulatory_doc_context: str | None = None,
     ) -> dict:
         user_message = (message or "").strip()
         if not user_message:
@@ -623,13 +822,6 @@ class SecOpsChatService:
                 report_id=report_id,
                 draft_context=draft_context,
                 current_user=current_user,
-            )
-        if force_general_mode or settings.SECOPS_CHAT_GENERAL_MODE:
-            return SecOpsChatService._reply_general_prompt(
-                message=user_message,
-                current_user=current_user,
-                report_id=report_id,
-                draft_context=draft_context,
             )
         if SecOpsChatService._is_greeting(user_message):
             return {
@@ -640,38 +832,109 @@ class SecOpsChatService:
                     current_user=current_user,
                 )["option_groups"],
             }
-        if not SecOpsChatService._is_in_scope(user_message):
-            return {"reply": SecOpsChatService.OUT_OF_SCOPE_REPLY, "option_groups": []}
 
-        lowered = user_message.casefold()
-        if not report_id and "menace" in lowered:
-            return SecOpsChatService._reply_general_threat_entry(current_user)
-        if not report_id and "rapport" in lowered:
-            return SecOpsChatService._reply_reports_menu(current_user)
-        if "questionnaire" in lowered or "question" in lowered:
-            return SecOpsChatService._reply_questionnaire_menu(draft_context)
+        # Si contexte réglementaire actif → aller directement au RAG réglementaire
+        from app.services.regulatory_service import is_regulatory_question as _is_reg_check
+        _is_reg_early = bool(regulatory_doc_context) or _is_reg_check(user_message)
+
+        if not _is_reg_early:
+            # Recherche semantique dans le FAQ (ignorée en contexte réglementaire)
+            from app.services.faq_service import query_faq, is_in_scope_semantic
+            faq_result = query_faq(user_message)
+            if faq_result:
+                return SecOpsChatService._build_faq_response(faq_result)
+
+            # Scope check semantique
+            if not is_in_scope_semantic(user_message):
+                return {"reply": SecOpsChatService.OUT_OF_SCOPE_REPLY, "option_groups": []}
+
+            lowered = user_message.casefold()
+            if not report_id and "menace" in lowered:
+                return SecOpsChatService._reply_general_threat_entry(current_user)
+            if not report_id and "rapport" in lowered:
+                return SecOpsChatService._reply_reports_menu(current_user)
+            if "questionnaire" in lowered or "question" in lowered:
+                return SecOpsChatService._reply_questionnaire_menu(draft_context)
+
+        if SecOpsChatService._detect_tour_intent(user_message):
+            return SecOpsChatService._reply_tour_menu()
+
+        guide_target = SecOpsChatService._detect_guide_target(user_message)
+        if guide_target:
+            return SecOpsChatService._reply_guide(guide_target)
 
         runtime_context = SecOpsChatService._build_runtime_context(
             current_user=current_user,
             report_id=report_id,
             draft_context=draft_context,
+            current_section=current_section,
+            view_state=view_state,
         )
-        prompt = (
-            "Tu es ASTORIA Guard.\n"
-            "Reponds en francais, tres court, 2 a 4 phrases max.\n"
-            "Si le contexte contient une question active, priorise son explication.\n"
-            "Si le contexte contient un rapport, reste aligne avec lui.\n"
-            "Pas de markdown brut visible.\n\n"
-            f"Contexte:\n{runtime_context}\n\n"
-            f"Catalogue minimal:\n{SecOpsChatService._build_catalog_context()}\n\n"
-            f"Question:\n{user_message}\n"
-        )
+        from app.services.rag_service import query_context
+        from app.services.regulatory_service import query_regulatory, is_regulatory_question
+        is_reg = is_regulatory_question(user_message)
+        if regulatory_doc_context:
+            is_reg = True
+        if not is_reg and history:
+            history_recent = history[-4:]
+            all_text = " ".join(m.get("content", "") for m in history_recent)
+            if is_regulatory_question(all_text):
+                is_reg = True
+
+        print(f"[RAG] is_reg={is_reg} reg_doc='{regulatory_doc_context}' msg='{user_message[:50]}'", flush=True)
+
+        rag_context = "" if is_reg else query_context(user_message, top_k=4)
+        qdrant_query = user_message
+        logger.info("[RAG-REG] Question: '%s' | Réglementaire détectée: %s", user_message[:80], is_reg)
+        regulatory_context = query_regulatory(qdrant_query, top_k=3) if is_reg else ""
+        if regulatory_context:
+            logger.info("[RAG-REG] Extraits trouvés (%d caractères) — injectés dans le prompt", len(regulatory_context))
+        else:
+            logger.info("[RAG-REG] Aucun extrait réglementaire injecté")
+        history_text = SecOpsChatService._format_history(history or [])
+
+        if regulatory_context:
+            prompt_parts = [
+                "Tu es un assistant specialise en securite et conformite reglementaire.",
+                "Reponds UNIQUEMENT en te basant sur les extraits fournis ci-dessous.",
+                "N invente aucun element absent des extraits. Si l information manque, dis-le clairement.",
+                "Reponds en francais. 5 phrases maximum. Pas de markdown.",
+            ]
+            if history_text:
+                prompt_parts.append(f"\n{history_text}")
+            prompt_parts.append(
+                f"\nExtraits reglementaires:\n{regulatory_context}"
+            )
+        elif is_reg:
+            prompt_parts = [
+                "Tu es un assistant specialise en conformite reglementaire et securite informatique.",
+                "Reponds a la question sur la norme ou la loi mentionnee.",
+                "Reponds en francais. 5 phrases maximum. Pas de markdown.",
+            ]
+            if history_text:
+                prompt_parts.append(f"\n{history_text}")
+        else:
+            prompt_parts = [
+                "Tu es un assistant specialise en securite informatique et threat modeling.",
+                "Reponds en francais. 5 phrases maximum.",
+                "Adapte ta reponse au contexte fourni.",
+                "Pas de markdown.",
+                "",
+                f"Contexte:\n{runtime_context}",
+            ]
+            if history_text:
+                prompt_parts.append(f"\n{history_text}")
+            if rag_context:
+                prompt_parts.append(
+                    f"\nConnaissances techniques disponibles:\n{rag_context}"
+                )
+        prompt_parts.append(f"\nQuestion:\n{user_message}")
+        prompt = "\n".join(prompt_parts)
         try:
             return {"reply": clean_text_response(call_mistral(prompt)), "option_groups": []}
         except LlmGuardrailBlockedError:
-            raise
-        except LlmServiceBadRequestError:
-            raise
+            logger.warning("Guardrail bloque une reponse SecOps")
+            return {"reply": SecOpsChatService.GUARDRAIL_BLOCKED_REPLY, "option_groups": []}
         except LlmServiceTimeoutError:
             logger.warning("Timeout Mistral pendant une reponse SecOps", extra={"http_status": HTTPStatus.GATEWAY_TIMEOUT})
             return {"reply": "Le service SecOps met trop de temps a repondre.", "option_groups": []}
@@ -680,44 +943,6 @@ class SecOpsChatService:
             return {"reply": SecOpsChatService.TEMPORARY_UNAVAILABLE_REPLY, "option_groups": []}
         except Exception:
             logger.exception("Echec reponse chatbot SecOps")
-            return {"reply": SecOpsChatService.TEMPORARY_UNAVAILABLE_REPLY, "option_groups": []}
-
-    @staticmethod
-    def _reply_general_prompt(
-        *,
-        message: str,
-        current_user: AuthenticatedUser,
-        report_id: str | None,
-        draft_context: dict[str, Any] | None,
-    ) -> dict:
-        runtime_context = SecOpsChatService._build_runtime_context(
-            current_user=current_user,
-            report_id=report_id,
-            draft_context=draft_context,
-        )
-        prompt = (
-            "Tu es ASTORIA Guard, un assistant conversationnel generaliste.\n"
-            "Reponds en francais de facon naturelle, claire et utile.\n"
-            "Si un contexte applicatif est fourni, utilise-le seulement s il est pertinent.\n"
-            "N invente pas des faits specifiques si l information manque.\n"
-            "Pas de markdown brut visible.\n\n"
-            f"Contexte optionnel:\n{runtime_context}\n\n"
-            f"Message utilisateur:\n{message}\n"
-        )
-        try:
-            return {"reply": clean_text_response(call_mistral(prompt)), "option_groups": []}
-        except LlmGuardrailBlockedError:
-            raise
-        except LlmServiceBadRequestError:
-            raise
-        except LlmServiceTimeoutError:
-            logger.warning("Timeout Mistral pendant une reponse chatbot general", extra={"http_status": HTTPStatus.GATEWAY_TIMEOUT})
-            return {"reply": "Le chatbot met trop de temps a repondre.", "option_groups": []}
-        except LlmServiceUnavailableError:
-            logger.warning("Service Mistral indisponible pendant une reponse chatbot general", extra={"http_status": HTTPStatus.BAD_GATEWAY})
-            return {"reply": SecOpsChatService.TEMPORARY_UNAVAILABLE_REPLY, "option_groups": []}
-        except Exception:
-            logger.exception("Echec reponse chatbot general")
             return {"reply": SecOpsChatService.TEMPORARY_UNAVAILABLE_REPLY, "option_groups": []}
 
     @staticmethod
@@ -730,10 +955,13 @@ class SecOpsChatService:
         chat_mode: str | None = None,
         action_id: str | None = None,
         action_payload: dict[str, Any] | None = None,
+        history: list[dict] | None = None,
+        current_section: str | None = None,
+        view_state: str | None = None,
+        regulatory_doc_context: str | None = None,
     ) -> dict:
         action = str(action_id or "").strip().upper()
-        normalized_chat_mode = str(chat_mode or "").strip().lower()
-        force_general_mode = normalized_chat_mode == "normal"
+        print(f"[RESPOND] action='{action}' msg='{(message or '')[:40]}' reg_doc='{regulatory_doc_context}'")
         payload = action_payload or {}
         effective_report_id = str(payload.get("report_id") or report_id or "").strip() or None
         active_question = SecOpsChatService._find_active_question(draft_context)
@@ -741,20 +969,7 @@ class SecOpsChatService:
         if effective_report_id:
             report_row, report_results = SecOpsChatService._load_report_bundle(effective_report_id, current_user)
 
-        if force_general_mode and action == "SHOW_MAIN_MENU":
-            return {
-                "reply": "Mode chat normal active. Posez votre question librement.",
-                "option_groups": [],
-            }
-        if force_general_mode and action == "":
-            return SecOpsChatService._reply_free_prompt(
-                message=message,
-                current_user=current_user,
-                report_id=effective_report_id,
-                draft_context=draft_context,
-                force_general_mode=True,
-            )
-        if action in {"", "SHOW_MAIN_MENU"}:
+        if action == "SHOW_MAIN_MENU" or (action == "" and not message.strip()):
             return SecOpsChatService._build_main_menu(
                 report_id=effective_report_id,
                 draft_context=draft_context,
@@ -826,11 +1041,33 @@ class SecOpsChatService:
             return SecOpsChatService._reply_threat_mitigations(report_results, str(payload.get("threat_name") or "").strip())
         if action == "THREAT_SUMMARY":
             return SecOpsChatService._reply_threat_summary(report_results, str(payload.get("threat_name") or "").strip())
+        if action == "REGULATORY_MENU":
+            return SecOpsChatService._reply_regulatory_menu()
+        if action == "REGULATORY_DOC_QUERY":
+            doc_name = str(payload.get("doc_name") or "").strip()
+            doc_id = payload.get("doc_id")
+            return SecOpsChatService._reply_regulatory_doc_entry(doc_name, doc_id)
+        if action == "REGULATORY_DOC_CUSTOM_QUERY":
+            doc_name = str(payload.get("doc_name") or "").strip()
+            question = str(payload.get("question") or "").strip()
+            if not question:
+                question = f"Explique {doc_name}"
+            full_question = f"{question} — dans le document {doc_name}"
+            return SecOpsChatService._reply_free_prompt(
+                message=full_question,
+                current_user=current_user,
+                report_id=effective_report_id,
+                draft_context=draft_context,
+                history=history,
+            )
 
         return SecOpsChatService._reply_free_prompt(
             message=message,
             current_user=current_user,
             report_id=effective_report_id,
             draft_context=draft_context,
-            force_general_mode=force_general_mode,
+            history=history,
+            current_section=current_section,
+            view_state=view_state,
+            regulatory_doc_context=regulatory_doc_context,
         )

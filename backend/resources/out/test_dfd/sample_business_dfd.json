@@ -1,0 +1,36 @@
+{
+  "boundaries": [
+    { "name": "Internet" },
+    { "name": "DMZ" },
+    { "name": "Interne" }
+  ],
+  "external_entities": [
+    { "name": "Client web", "boundary": "Internet" },
+    { "name": "Partenaire SSO", "boundary": "Internet" }
+  ],
+  "processes": [
+    { "name": "WAF / Reverse Proxy", "boundary": "DMZ" },
+    { "name": "Frontend", "boundary": "DMZ" },
+    { "name": "API Gateway", "boundary": "DMZ" },
+    { "name": "Service Auth", "boundary": "Interne" },
+    { "name": "Service Metier", "boundary": "Interne" },
+    { "name": "Moteur LLM", "boundary": "Interne" }
+  ],
+  "data_stores": [
+    { "name": "PostgreSQL", "boundary": "Interne" },
+    { "name": "Vector DB", "boundary": "Interne" },
+    { "name": "Logs SIEM", "boundary": "Interne" }
+  ],
+  "data_flows": [
+    { "source": "Client web", "target": "WAF / Reverse Proxy", "label": "requete HTTPS" },
+    { "source": "WAF / Reverse Proxy", "target": "Frontend", "label": "contenu web" },
+    { "source": "Frontend", "target": "API Gateway", "label": "appel API" },
+    { "source": "Partenaire SSO", "target": "Service Auth", "label": "jeton SSO" },
+    { "source": "API Gateway", "target": "Service Auth", "label": "verification jeton" },
+    { "source": "API Gateway", "target": "Service Metier", "label": "commande metier" },
+    { "source": "Service Metier", "target": "PostgreSQL", "label": "donnees client" },
+    { "source": "Service Metier", "target": "Vector DB", "label": "embeddings" },
+    { "source": "Service Metier", "target": "Moteur LLM", "label": "prompt contexte" },
+    { "source": "Service Metier", "target": "Logs SIEM", "label": "journal securite" }
+  ]
+}

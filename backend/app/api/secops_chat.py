@@ -32,6 +32,10 @@ def send_secops_chat_message(
             chat_mode=payload.chat_mode,
             action_id=payload.action_id,
             action_payload=payload.action_payload,
+            history=[message.model_dump() for message in payload.history],
+            current_section=payload.current_section,
+            view_state=payload.view_state,
+            regulatory_doc_context=payload.regulatory_doc_context,
         ))
     except LlmGuardrailBlockedError as e:
         blocked_entity = e.blocked_entity or "DONNEE_SENSIBLE"

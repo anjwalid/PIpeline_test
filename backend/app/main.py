@@ -9,7 +9,9 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.admin_catalog import router as admin_catalog_router
 from app.api.admin_cve_graph import router as admin_cve_graph_router
 from app.api.admin_audit import router as admin_audit_router
+from app.api.admin_knowledge import router as admin_knowledge_router
 from app.api.admin_questionnaire import router as admin_questionnaire_router
+from app.api.admin_regulatory import router as admin_regulatory_router
 from app.api.analysis import router as analysis_router
 from app.api.llm_feedback import router as llm_feedback_router
 from app.api.questionnaire import router as questionnaire_router
@@ -19,6 +21,8 @@ from app.core.config import settings
 from app.repositories.questionnaire_repository import QuestionnaireRepository
 from app.services.audit_service import AuditService
 from app.services.cve_sync_service import CveSyncService
+from app.services.faq_service import build_faq_index
+from app.services.rag_service import build_index
 from app.services.report_management_service import ReportManagementService
 
 logging.basicConfig(
@@ -37,6 +41,8 @@ def startup_prepare_schema():
     QuestionnaireRepository.ensure_schema()
     AuditService.ensure_schema()
     CveSyncService.start()
+    build_index()
+    build_faq_index()
 
 
 @app.on_event("shutdown")
@@ -109,6 +115,8 @@ app.include_router(analysis_router)
 app.include_router(reports_router)
 app.include_router(llm_feedback_router)
 app.include_router(secops_chat_router)
+app.include_router(admin_regulatory_router)
+app.include_router(admin_knowledge_router)
 
 Instrumentator(
     should_group_status_codes=True,

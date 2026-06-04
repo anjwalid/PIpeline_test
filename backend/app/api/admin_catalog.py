@@ -17,6 +17,8 @@ from app.schemas.catalog import (
     CatalogThreatUpsertRequest,
     InternalSecuritySolutionPayload,
     InternalSecuritySolutionResponse,
+    ThreatFrameworkMappingRequest,
+    ThreatFrameworkMappingResponse,
 )
 from app.services.audit_service import AuditService
 from app.services.catalog_service import CatalogService
@@ -225,6 +227,52 @@ def export_threat_catalog(_: Annotated[AuthenticatedUser, Depends(get_admin_user
             "Content-Disposition": f"attachment; filename={export_payload['filename']}"
         },
     )
+
+
+@router.get(
+    "/framework-mappings",
+    response_model=list[ThreatFrameworkMappingResponse],
+)
+def list_framework_mappings(_: Annotated[AuthenticatedUser, Depends(get_admin_user)]):
+    return CatalogService.list_all_framework_mappings()
+
+
+@router.get(
+    "/{threat_id}/framework-mapping",
+    response_model=ThreatFrameworkMappingResponse,
+    responses={404: {"description": THREAT_NOT_FOUND}},
+)
+def get_framework_mapping(
+    threat_id: int,
+    _: Annotated[AuthenticatedUser, Depends(get_admin_user)],
+):
+    mapping = CatalogService.get_framework_mapping(threat_id)
+    if not mapping:
+        raise HTTPException(status_code=404, detail=THREAT_NOT_FOUND)
+    return mapping
+
+
+@router.put(
+    "/{threat_id}/framework-mapping",
+    response_model=ThreatFrameworkMappingResponse,
+    responses={404: {"description": THREAT_NOT_FOUND}},
+)
+def upsert_framework_mapping(
+    threat_id: int,
+    payload: ThreatFrameworkMappingRequest,
+    current_user: Annotated[AuthenticatedUser, Depends(get_admin_user)],
+):
+    mapping = CatalogService.upsert_framework_mapping(threat_id, payload.model_dump())
+    if not mapping:
+        raise HTTPException(status_code=404, detail=THREAT_NOT_FOUND)
+    AuditService.log_action(
+        actor=current_user,
+        action_type="UPDATE",
+        entity_type="ThreatFrameworkMapping",
+        entity_id=str(threat_id),
+        entity_label=f"Mapping threat {threat_id}",
+    )
+    return mapping
 
 
 @router.get(
