@@ -1,0 +1,321 @@
+.dfd-studio-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dfd-studio-shell.fullscreen {
+  height: 100%;
+  min-height: 0;
+}
+
+.dfd-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.dfd-toolbar h3,
+.dfd-toolbar h4 {
+  margin: 4px 0 0;
+  font-size: 1.1rem;
+  color: #0f172a;
+}
+
+.dfd-toolbar-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dfd-toolbar-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.dfd-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.dfd-toolbar-actions button,
+.dfd-empty-state button,
+.dfd-danger-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  border-radius: 14px;
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #1f2937;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.dfd-toolbar-actions button:hover,
+.dfd-empty-state button:hover,
+.dfd-danger-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+}
+
+.dfd-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+}
+
+.dfd-layout.fullscreen {
+  flex: 1;
+  min-height: 0;
+}
+
+.dfd-canvas-card,
+.dfd-inspector {
+  border: 1px solid rgba(251, 191, 36, 0.16);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  overflow: hidden;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
+}
+
+.dfd-canvas-card {
+  min-height: 700px;
+}
+
+.dfd-studio-shell.fullscreen .dfd-canvas-card {
+  min-height: 0;
+  height: 100%;
+}
+
+.dfd-studio-shell.fullscreen .dfd-inspector {
+  min-height: 0;
+  overflow: auto;
+}
+
+.dfd-canvas-card .react-flow {
+  background: linear-gradient(180deg, #fffefe, #fffdfa);
+}
+
+.dfd-inspector {
+  padding: 18px;
+}
+
+.dfd-inspector-head {
+  margin-bottom: 16px;
+}
+
+.dfd-inspector-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dfd-inspector-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.dfd-inspector-form input {
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 0.92rem;
+  color: #0f172a;
+  background: #fff;
+}
+
+.dfd-empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #fffdf8, #fff9f1);
+  color: #57534e;
+}
+
+.dfd-node-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.1);
+}
+
+.dfd-node-card.selected {
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.16), 0 18px 36px rgba(15, 23, 42, 0.16);
+}
+
+.dfd-node-card.actor {
+  border: 2px solid #1d4ed8;
+  border-radius: 12px;
+  min-height: 76px;
+}
+
+.dfd-node-card.process {
+  border: 2px solid #0f766e;
+  border-radius: 999px;
+  min-height: 118px;
+}
+
+.dfd-node-card.store {
+  flex-direction: column;
+  gap: 10px;
+  min-height: 86px;
+}
+
+.dfd-store-line {
+  width: 100%;
+  height: 3px;
+  background: #b45309;
+}
+
+.dfd-node-card.boundary {
+  background: transparent;
+  box-shadow: none;
+  width: 100%;
+  height: 100%;
+}
+
+.dfd-node-card.boundary.auto-layout {
+  pointer-events: none;
+}
+
+.dfd-node-card.boundary.auto-layout .dfd-boundary-badge {
+  top: 0;
+  left: 0;
+}
+
+.dfd-boundary-curve.auto-layout {
+  opacity: 0.95;
+}
+
+.dfd-boundary-badge {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 2;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.dfd-boundary-curve {
+  width: 100%;
+  height: 100%;
+  transform-origin: center;
+}
+
+.dfd-node-label {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.dfd-handle {
+  width: 10px !important;
+  height: 10px !important;
+  background: #334155 !important;
+  border: 2px solid #fff !important;
+}
+
+.dfd-edge-label {
+  position: absolute;
+  pointer-events: all;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  min-width: 0;
+  max-width: 132px;
+  border-radius: 999px;
+  border: 1px solid rgba(203, 213, 225, 0.98);
+  background: rgba(255, 255, 255, 0.995);
+  color: #1f2937;
+  font-size: 0.79rem;
+  font-weight: 800;
+  white-space: normal;
+  line-height: 1.15;
+  text-align: center;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.12);
+}
+
+.dfd-danger-button {
+  justify-content: center;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.dfd-resize-line {
+  border-color: #111827 !important;
+}
+
+.dfd-resize-handle {
+  width: 10px !important;
+  height: 10px !important;
+  background: #111827 !important;
+  border: none !important;
+}
+
+.react-flow__node-trustBoundary {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.dfd-studio-shell.is-exporting .dfd-handle,
+.dfd-studio-shell.is-exporting .react-flow__resize-control,
+.dfd-studio-shell.is-exporting .react-flow__selection,
+.dfd-studio-shell.is-exporting .react-flow__controls,
+.dfd-studio-shell.is-exporting .react-flow__minimap {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+@media (max-width: 1100px) {
+  .dfd-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dfd-canvas-card {
+    min-height: 560px;
+  }
+}
+
+@media (max-width: 860px) {
+  .dfd-toolbar {
+    flex-direction: column;
+  }
+
+  .dfd-toolbar-logos {
+    flex-wrap: wrap;
+  }
+}

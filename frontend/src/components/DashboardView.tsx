@@ -32,7 +32,10 @@ export function DashboardView({
   const approvedReports = history.filter((item) => item.status === 'APPROVED').length;
 
   return (
-    <div className="mx-auto max-w-[1400px] px-4 sm:px-6 lg:px-8 pt-40 pb-12">
+    <div
+      className="mx-auto max-w-[1400px] px-4 sm:px-6 lg:px-8 pt-40 pb-12"
+      data-guide-target="dashboard"
+    >
       <div className="mb-10">
         <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
           <ShieldCheck className="h-4 w-4 text-accent-primary" />
@@ -51,7 +54,10 @@ export function DashboardView({
         </p>
       </div>
 
-      <div className="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+      <div
+        className="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4"
+        data-guide-target="dashboard-stats"
+      >
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-xl">
           <div className="mb-5 flex items-center justify-between">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-900 text-white">

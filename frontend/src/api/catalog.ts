@@ -6,6 +6,7 @@ import type {
   CatalogThreat,
   CatalogThreatListItem,
   InternalSecuritySolution,
+  ThreatFrameworkMapping,
 } from '../types';
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -146,6 +147,40 @@ export async function deleteCatalogReferenceRecord(referenceId: number): Promise
   });
 
   await parseResponse<{ deleted: boolean }>(response);
+}
+
+export async function fetchAllFrameworkMappings(): Promise<ThreatFrameworkMapping[]> {
+  const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/framework-mappings`, {
+    method: 'GET',
+    headers: await buildAuthenticatedHeaders(),
+  });
+
+  return parseResponse<ThreatFrameworkMapping[]>(response);
+}
+
+export async function fetchThreatFrameworkMapping(threatId: number): Promise<ThreatFrameworkMapping> {
+  const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/${threatId}/framework-mapping`, {
+    method: 'GET',
+    headers: await buildAuthenticatedHeaders(),
+  });
+
+  return parseResponse<ThreatFrameworkMapping>(response);
+}
+
+export async function updateThreatFrameworkMapping(
+  threatId: number,
+  payload: Omit<ThreatFrameworkMapping, 'id_menace' | 'nom_menace'>
+): Promise<ThreatFrameworkMapping> {
+  const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/${threatId}/framework-mapping`, {
+    method: 'PUT',
+    headers: {
+      ...(await buildAuthenticatedHeaders()),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  return parseResponse<ThreatFrameworkMapping>(response);
 }
 
 export async function exportCatalogThreatWorkbook(): Promise<Blob> {

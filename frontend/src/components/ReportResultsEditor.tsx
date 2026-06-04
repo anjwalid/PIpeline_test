@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { ArrowLeft, FilePlus2, ImageUp, RefreshCcw, Save, Trash2 } from 'lucide-react';
+import { DfdStudio } from './DfdStudio';
 import {
   fetchReportResults,
   regenerateReport,
@@ -75,6 +76,7 @@ export function ReportResultsEditor({
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [selectedReasonCodes, setSelectedReasonCodes] = useState<string[]>([]);
   const [freeComment, setFreeComment] = useState('');
+  const [isStudioOpen, setIsStudioOpen] = useState(false);
   const latestManagerComment = report?.status_history.find((entry) => Boolean(entry.comment))?.comment?.trim() || '';
   const rejectionFeedback = report?.manager_feedback.filter((entry) => entry.decision_type === 'REJECTED') || [];
 
@@ -92,6 +94,7 @@ export function ReportResultsEditor({
           application_description: reportResults.application_description,
           selected_threats: reportResults.selected_threats,
           application_version: reportResults.application_version,
+          dfd_json: reportResults.dfd_json,
           dfd_image_path: reportResults.dfd_image_path ?? null,
           dfd_reference: reportResults.dfd_reference ?? 'DFD-01',
         };
@@ -169,6 +172,7 @@ export function ReportResultsEditor({
       application_description: saved.application_description,
       selected_threats: saved.selected_threats,
       application_version: saved.application_version,
+      dfd_json: saved.dfd_json,
       dfd_image_path: saved.dfd_image_path ?? null,
       dfd_reference: saved.dfd_reference ?? 'DFD-01',
     };
@@ -516,20 +520,30 @@ export function ReportResultsEditor({
         </label>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <label className="space-y-1 block">
+          <div className="space-y-1 block">
             <span className="text-xs font-semibold text-text-secondary">Image DFD</span>
             <div className="flex flex-col gap-3 rounded-lg border border-border-subtle p-3">
-              <label className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-border-subtle px-3 py-2 text-sm text-text-primary hover:border-accent-primary transition">
-                <ImageUp className="w-4 h-4" />
-                {isUploadingDfd ? 'Upload en cours...' : 'Uploader une image'}
-                <input
-                  type="file"
-                  accept=".png,.jpg,.jpeg,.webp"
-                  onChange={(event) => void handleDfdUpload(event)}
-                  disabled={isUploadingDfd}
-                  className="hidden"
-                />
-              </label>
+              <div className="flex flex-wrap gap-3">
+                <label className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-border-subtle px-3 py-2 text-sm text-text-primary hover:border-accent-primary transition">
+                  <ImageUp className="w-4 h-4" />
+                  {isUploadingDfd ? 'Upload en cours...' : 'Uploader une image'}
+                  <input
+                    type="file"
+                    accept=".png,.jpg,.jpeg,.webp"
+                    onChange={(event) => void handleDfdUpload(event)}
+                    disabled={isUploadingDfd}
+                    className="hidden"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => setIsStudioOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
+                >
+                  Ouvrir Studio DFD
+                </button>
+              </div>
 
               <input
                 value={payload.dfd_image_path ?? ''}
@@ -538,7 +552,7 @@ export function ReportResultsEditor({
                 className="w-full rounded-lg border border-border-subtle bg-slate-50 px-3 py-2 text-sm"
               />
             </div>
-          </label>
+          </div>
 
           <label className="space-y-1 block">
             <span className="text-xs font-semibold text-text-secondary">Reference DFD</span>
@@ -555,6 +569,7 @@ export function ReportResultsEditor({
             />
           </label>
         </div>
+
       </div>
 
       <div className="space-y-4 mt-6">
@@ -774,6 +789,50 @@ export function ReportResultsEditor({
               >
                 Confirmer
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isStudioOpen && (
+        <div className="fixed inset-0 z-[70] bg-[linear-gradient(180deg,#fffdf8_0%,#fff8ed_100%)]">
+          <div className="flex h-full flex-col">
+            <div className="flex items-center justify-between border-b border-amber-200/70 bg-white/70 px-6 py-4 backdrop-blur-xl">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
+                  Studio DFD
+                </p>
+                <h2 className="mt-1 text-xl font-bold text-slate-900">
+                  Edition plein ecran du diagramme
+                </h2>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsStudioOpen(false)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-hidden p-4">
+              <div className="h-full rounded-2xl border border-amber-200/70 bg-white/85 p-3 shadow-[0_18px_45px_rgba(217,119,6,0.08)] backdrop-blur-sm">
+                <DfdStudio
+                  title="Studio DFD modifiable"
+                  value={payload.dfd_json}
+                  fullscreen
+                  onChange={(nextDfd) =>
+                    setPayload({
+                      ...payload,
+                      dfd_json: nextDfd,
+                      dfd_image_path: null,
+                    })
+                  }
+                />
+              </div>
             </div>
           </div>
         </div>

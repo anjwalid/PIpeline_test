@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 
 import { fetchReportBlobUrl, fetchReportResults, toAbsoluteReportUrl } from '../api/reports';
+import { DfdStudio } from './DfdStudio';
 import { ReportVersionHistory } from './ReportVersionHistory';
 import type { CatalogReference, ReportRecord, ReportResultsRecord } from '../types';
 
@@ -134,6 +135,7 @@ export function ReportView({
 
   const cveReferences = collectCveReferences(reportResults);
   const cveSummary = buildCveSummary(reportResults, cveReferences.length);
+  const displayedDfd = selectedVersion?.dfd_json ?? reportResults?.dfd_json ?? null;
 
   return (
     <div className="max-w-[1200px] mx-auto px-6 pt-40 pb-12">
@@ -233,6 +235,16 @@ export function ReportView({
 
       {reportResults && (
         <div className="mb-6">
+          <DfdStudio
+            title="DFD interactif de la version"
+            value={displayedDfd ?? EMPTY_STRUCTURED_DFD}
+            readOnly
+          />
+        </div>
+      )}
+
+      {reportResults && (
+        <div className="mb-6">
           <ReportVersionHistory
             versions={reportResults.version_history}
             currentVersionNumber={reportResults.version_number}
@@ -264,6 +276,14 @@ export function ReportView({
     </div>
   );
 }
+
+const EMPTY_STRUCTURED_DFD = {
+  boundaries: [],
+  external_entities: [],
+  processes: [],
+  data_stores: [],
+  data_flows: [],
+};
 
 function RejectedFeedbackPanel({ report }: Readonly<{ report: ReportRecord }>) {
   const latestComment = report.status_history.find((entry) => Boolean(entry.comment))?.comment;

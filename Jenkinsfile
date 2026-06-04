@@ -72,6 +72,9 @@ pipeline {
         // SEULS services que le pipeline est autorise a toucher
         APP_SERVICES = "backend frontend"
 
+        // Services monitoring deployes dans un compose separe
+        MONITORING_SERVICES = "prometheus grafana"
+
         // Containers PROTEGES : verifies AVANT et APRES deploy
         PROTECTED_CONTAINERS = "postgres_db keycloak node-exporter"
 
@@ -584,6 +587,70 @@ print(total)
             }
         }
 
+        stage('Deploy Monitoring') {
+            when { expression { return params.SKIP_DEPLOY == false } }
+            steps {
+                withCredentials([
+                    string(credentialsId: 'vm-desktop-ip', variable: 'VM_IP'),
+                    sshUserPrivateKey(credentialsId: 'vm-desktop-ssh',
+                                      keyFileVariable: 'SSH_KEY',
+                                      usernameVariable: 'SSH_USER')
+                ]) {
+                    sh '''
+                        set -e
+                        echo "[*] Preparation monitoring sur VM distante..."
+                        ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no \
+                            ${SSH_USER}@${VM_IP} \
+                            "mkdir -p ~/awb-deploy/monitoring/prometheus ~/awb-deploy/monitoring/grafana && \
+                             rm -f ~/awb-deploy/docker-compose.monitoring.yml ~/awb-deploy/monitoring/prometheus/prometheus.yml && \
+                             rm -rf ~/awb-deploy/monitoring/grafana/provisioning"
+
+                        scp -i ${SSH_KEY} -o StrictHostKeyChecking=no \
+                            docker-compose.monitoring.yml \
+                            ${SSH_USER}@${VM_IP}:~/awb-deploy/docker-compose.monitoring.yml
+                        scp -i ${SSH_KEY} -o StrictHostKeyChecking=no \
+                            monitoring/prometheus/prometheus.yml \
+                            ${SSH_USER}@${VM_IP}:~/awb-deploy/monitoring/prometheus/prometheus.yml
+                        scp -i ${SSH_KEY} -o StrictHostKeyChecking=no -r \
+                            monitoring/grafana/provisioning \
+                            ${SSH_USER}@${VM_IP}:~/awb-deploy/monitoring/grafana/
+
+                        echo "[*] Verification compose monitoring..."
+                        MON_DECLARED=$(ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no \
+                            ${SSH_USER}@${VM_IP} \
+                            "cd ~/awb-deploy && docker compose -f docker-compose.monitoring.yml config --services" | sort | xargs)
+                        echo "    Services monitoring distants: '${MON_DECLARED}'"
+                        for svc in ${MONITORING_SERVICES}; do
+                            if ! echo "${MON_DECLARED}" | grep -qw "${svc}"; then
+                                echo "FATAL: service monitoring '${svc}' absent du compose distant"
+                                exit 1
+                            fi
+                        done
+                        for forbidden in backend frontend postgres_db postgres keycloak node-exporter; do
+                            if echo "${MON_DECLARED}" | grep -qw "${forbidden}"; then
+                                echo "FATAL: compose monitoring declare service interdit '${forbidden}'"
+                                exit 1
+                            fi
+                        done
+
+                        echo "[*] Pull images monitoring..."
+                        ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no \
+                            ${SSH_USER}@${VM_IP} \
+                            "cd ~/awb-deploy && docker compose -f docker-compose.monitoring.yml pull ${MONITORING_SERVICES}"
+
+                        echo "[*] Demarrage monitoring..."
+                        ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no \
+                            ${SSH_USER}@${VM_IP} \
+                            "cd ~/awb-deploy && docker compose -f docker-compose.monitoring.yml up -d ${MONITORING_SERVICES}" \
+                            | tee ${REPORTS_DIR}/deploy/monitoring-deploy.log
+                    '''
+                }
+            }
+            post {
+                failure { script { deployStatus = "FAIL" } }
+            }
+        }
+
         stage('Health Check') {
             when { expression { return params.SKIP_DEPLOY == false } }
             steps {
@@ -592,7 +659,7 @@ print(total)
                         set +e
                         echo "[*] Wait 15s..."
                         sleep 15
-                        for endpoint in "http://${VM_IP}:8000/docs" "http://${VM_IP}:5173" "http://${VM_IP}:8080"; do
+                        for endpoint in "http://${VM_IP}:8000/docs" "http://${VM_IP}:5173" "http://${VM_IP}:8080" "http://${VM_IP}:9090" "http://${VM_IP}:3000/login"; do
                             CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 ${endpoint})
                             echo "  ${endpoint} -> HTTP ${CODE}"
                         done | tee ${REPORTS_DIR}/deploy/health.log

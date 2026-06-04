@@ -15,6 +15,10 @@ export interface SecOpsChatRequestPayload {
   chat_mode?: 'guided' | 'normal';
   action_id?: string;
   action_payload?: Record<string, unknown>;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  current_section?: string;
+  view_state?: string;
+  regulatory_doc_context?: string;
 }
 
 interface ApiErrorDetail {

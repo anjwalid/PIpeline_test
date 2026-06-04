@@ -245,6 +245,25 @@ export function FormView({ onSubmit, onDraftChange }: Readonly<FormViewProps>) {
     );
   }, [sortedQuestions, currentStep, answers]);
 
+  const questionnaireStepContexts = useMemo(
+    () =>
+      sortedSteps.map((step) => ({
+        title: step.title,
+        questions: sortedQuestions
+          .filter(
+            (question) =>
+              question.step_id === step.id &&
+              question.is_active &&
+              isQuestionVisible(question)
+          )
+          .map((question) => ({
+            code: question.code,
+            label: question.label,
+          })),
+      })),
+    [sortedSteps, sortedQuestions, answers]
+  );
+
   const visibleQuestionNumberMap = useMemo(() => {
     const numbering = new Map<number, string>();
     visibleQuestionsForCurrentStep.forEach((question, index) => {
@@ -287,6 +306,7 @@ export function FormView({ onSubmit, onDraftChange }: Readonly<FormViewProps>) {
       questionnaire_code: questionnaire.code,
       answers,
       active_question: activeQuestionContext,
+      questionnaire_steps: questionnaireStepContexts,
     });
   }, [
     onDraftChange,
@@ -294,6 +314,7 @@ export function FormView({ onSubmit, onDraftChange }: Readonly<FormViewProps>) {
     baseInfo,
     answers,
     activeQuestionCode,
+    questionnaireStepContexts,
     visibleQuestionsForCurrentStep,
     visibleQuestionNumberMap,
   ]);
@@ -712,15 +733,17 @@ export function FormView({ onSubmit, onDraftChange }: Readonly<FormViewProps>) {
         </div>
       </div>
 
-      <Stepper
-        currentStep={currentStepIndex + 1}
-        steps={sortedSteps.map((step) => step.title)}
-        onStepClick={handleStepClick}
-      />
+      <div data-guide-target="analysis">
+        <Stepper
+          currentStep={currentStepIndex + 1}
+          steps={sortedSteps.map((step) => step.title)}
+          onStepClick={handleStepClick}
+        />
+      </div>
 
       {currentStepIndex === 0 ? (
         <div className="space-y-5">
-          <div>
+          <div data-guide-target="form-app-name">
             <label
               htmlFor="app-name"
               className="block font-sans text-sm font-semibold text-text-primary mb-1.5"
@@ -779,7 +802,7 @@ export function FormView({ onSubmit, onDraftChange }: Readonly<FormViewProps>) {
         </div>
       )}
 
-      <div className="flex items-center justify-between mt-9">
+      <div className="flex items-center justify-between mt-9" data-guide-target="form-nav-buttons">
         <button
           onClick={handleBack}
           disabled={currentStepIndex === 0}

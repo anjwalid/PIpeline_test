@@ -3,11 +3,14 @@ import {
   ChevronDown,
   Database,
   Download,
+  Edit2,
   Edit3,
+  FileText,
   History,
   LayoutDashboard,
   LibraryBig,
   Link2,
+  MessageCircleMore,
   Network,
   Plus,
   RefreshCw,
@@ -15,6 +18,8 @@ import {
   Settings2,
   ShieldAlert,
   Trash2,
+  Upload,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { fetchAuditTrail } from '../../api/audit';
@@ -32,8 +37,27 @@ import {
   fetchInternalSecuritySolutions,
   updateInternalSecuritySolution,
   updateCatalogReferenceRecord,
+  fetchAllFrameworkMappings,
 } from '../../api/catalog';
-import { buildAuthenticatedHeaders } from '../../auth/apiAuth';
+import {
+  fetchRegulatoryDocuments,
+  uploadRegulatoryDocument,
+  deleteRegulatoryDocument,
+} from '../../api/regulatory';
+import {
+  fetchFaq,
+  createFaq,
+  updateFaq,
+  deleteFaq,
+  fetchGuideSteps,
+  createGuideStep,
+  updateGuideStep,
+  deleteGuideStep,
+  updateDocShortcuts,
+  type FaqItem,
+  type GuideStep,
+} from '../../api/knowledge';
+import keycloak from '../../auth/keycloak';
 import { CveGraphExplorer } from '../../components/CveGraphExplorer';
 import { Navbar } from '../../components/Navbar';
 import { pushBrowserPath } from '../../utils/navigation';
@@ -62,9 +86,11 @@ import type {
   Questionnaire,
   QuestionnaireStep,
   QuestionnaireUpsertPayload,
+  RegulatoryDocument,
+  ThreatFrameworkMapping,
 } from '../../types';
 
-type AdminSection = 'dashboard' | 'catalog' | 'questionnaire' | 'references' | 'internal_solutions' | 'cve_graph' | 'traceability';
+type AdminSection = 'dashboard' | 'catalog' | 'questionnaire' | 'references' | 'internal_solutions' | 'cve_graph' | 'traceability' | 'regulatory';
 
 interface AdminPageProps {
   currentUserName: string;
@@ -178,6 +204,20 @@ const INTERNAL_SOLUTION_USAGE_SUGGESTIONS = [
   'Conformite et audit',
   'Vulnerability management',
 ];
+
+function buildAuthHeaders(contentType = false): HeadersInit {
+  const headers: HeadersInit = {};
+
+  if (contentType) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  if (keycloak.authenticated && keycloak.token) {
+    headers.Authorization = `Bearer ${keycloak.token}`;
+  }
+
+  return headers;
+}
 
 interface EditableReferenceForm {
   id_reference: number | null;
@@ -631,6 +671,39 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
   const [isSavingCatalogThreat, setIsSavingCatalogThreat] = useState(false);
   const [isExportingCatalog, setIsExportingCatalog] = useState(false);
   const [catalogStatusMessage, setCatalogStatusMessage] = useState('');
+  const [allFrameworkMappings, setAllFrameworkMappings] = useState<ThreatFrameworkMapping[]>([]);
+  const [regulatoryDocs, setRegulatoryDocs] = useState<RegulatoryDocument[]>([]);
+  const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+  const [regulatoryUploadName, setRegulatoryUploadName] = useState('');
+  const [regulatoryUploadCategory, setRegulatoryUploadCategory] = useState('');
+  const [regulatoryUploadFile, setRegulatoryUploadFile] = useState<File | null>(null);
+  const [editingShortcutsDocId, setEditingShortcutsDocId] = useState<number | null>(null);
+  const [editingShortcuts, setEditingShortcuts] = useState<string[]>([]);
+  const [faqItems, setFaqItems] = useState<FaqItem[]>([]);
+  const [editingFaq, setEditingFaq] = useState<FaqItem | null>(null);
+  const [newFaq, setNewFaq] = useState<Omit<FaqItem, 'id'>>({ category: 'about', question: '', answer: '', action_id: null, action_label: null, is_active: true });
+  const [guideSteps, setGuideSteps] = useState<GuideStep[]>([]);
+  const [editingStep, setEditingStep] = useState<GuideStep | null>(null);
+  const [newStep, setNewStep] = useState<Omit<GuideStep, 'id'>>({ tour_id: 'TOUR_ANALYSE', step_order: 1, title: '', description: '', nav_section: null, target: null });
+  const [knowledgeTab, setKnowledgeTab] = useState<'regulatory' | 'faq' | 'guides'>('regulatory');
+
+  // Listes dynamiques dérivées des données chargées
+  const allTourIds = useMemo(() => {
+    const fromSteps = [...new Set(guideSteps.map(s => s.tour_id))];
+    const defaults = ['TOUR_ANALYSE', 'TOUR_HISTORY', 'TOUR_DASHBOARD'];
+    return [...new Set([...defaults, ...fromSteps])];
+  }, [guideSteps]);
+
+  const allNavSections = useMemo(() => {
+    const fromSteps = guideSteps.map(s => s.nav_section).filter((s): s is string => !!s);
+    const defaults = ['analysis', 'history', 'dashboard', 'nav-menu'];
+    return [...new Set([...defaults, ...fromSteps])];
+  }, [guideSteps]);
+
+  const allActionIds = useMemo(() => {
+    const fromTours = allTourIds;
+    return [...fromTours, 'GUIDE_HIGHLIGHT_NAV_MENU', 'SHOW_TOURS'];
+  }, [allTourIds]);
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -656,7 +729,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
       setErrorMessage('');
 
       const response = await fetch(`${API_BASE_URL}/admin/questionnaires`, {
-        headers: await buildAuthenticatedHeaders(),
+        headers: buildAuthHeaders(),
       });
       if (!response.ok) {
         throw new Error('Impossible de charger les questionnaires.');
@@ -740,6 +813,68 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
     }
   };
 
+  const refreshAllFrameworkMappings = async () => {
+    try {
+      const data = await fetchAllFrameworkMappings();
+      setAllFrameworkMappings(data);
+    } catch (error) {
+      console.error('[FrameworkMappings]', error);
+    }
+  };
+
+  const refreshRegulatoryDocs = async () => {
+    try {
+      const data = await fetchRegulatoryDocuments();
+      setRegulatoryDocs(data);
+    } catch (error) {
+      console.error('[RegulatoryDocs]', error);
+    }
+  };
+
+  const refreshFaq = async () => {
+    try { setFaqItems(await fetchFaq()); } catch { /* silent */ }
+  };
+
+  const refreshGuideSteps = async () => {
+    try { setGuideSteps(await fetchGuideSteps()); } catch { /* silent */ }
+  };
+
+  const handleUploadRegulatoryDoc = async () => {
+    if (!regulatoryUploadFile || !regulatoryUploadName.trim() || !regulatoryUploadCategory.trim()) {
+      await showErrorAlert('Champs obligatoires', 'Nom, catégorie et fichier PDF sont requis.');
+      return;
+    }
+    try {
+      setIsUploadingDoc(true);
+      await uploadRegulatoryDocument(regulatoryUploadFile, regulatoryUploadName.trim(), regulatoryUploadCategory.trim());
+      setRegulatoryUploadFile(null);
+      setRegulatoryUploadName('');
+      setRegulatoryUploadCategory('');
+      await refreshRegulatoryDocs();
+      await showSuccessAlert('Document indexé', 'Le document a été uploadé et indexé dans la base réglementaire.');
+    } catch (error) {
+      await showErrorAlert('Erreur upload', error instanceof Error ? error.message : 'Erreur lors de l\'upload.');
+    } finally {
+      setIsUploadingDoc(false);
+    }
+  };
+
+  const handleDeleteRegulatoryDoc = async (docId: number, docName: string) => {
+    const confirmed = await showConfirmAlert({
+      title: `Supprimer "${docName}" ?`,
+      text: 'Le document sera retiré de la base réglementaire du chatbot.',
+      confirmButtonText: 'Supprimer',
+    });
+    if (!confirmed) return;
+    try {
+      await deleteRegulatoryDocument(docId);
+      await refreshRegulatoryDocs();
+      await showSuccessAlert('Supprimé', 'Document retiré de la base réglementaire.');
+    } catch (error) {
+      await showErrorAlert('Erreur', error instanceof Error ? error.message : 'Erreur lors de la suppression.');
+    }
+  };
+
   const refreshInternalSecuritySolutions = async () => {
     try {
       setErrorMessage('');
@@ -792,6 +927,10 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
     void refreshInternalSecuritySolutions();
     void refreshAuditTrailEntries();
     void refreshCveGraphStats();
+    void refreshAllFrameworkMappings();
+    void refreshRegulatoryDocs();
+    void refreshFaq();
+    void refreshGuideSteps();
   }, []);
 
   useEffect(() => {
@@ -814,7 +953,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
         setErrorMessage('');
 
         const response = await fetch(`${API_BASE_URL}/admin/questionnaires/${selectedQuestionnaireId}`, {
-          headers: await buildAuthenticatedHeaders(),
+          headers: buildAuthHeaders(),
         });
         if (!response.ok) {
           throw new Error('Impossible de charger le questionnaire sélectionné.');
@@ -1711,7 +1850,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
           : `${API_BASE_URL}/admin/questionnaires/${selectedQuestionnaireId}`,
         {
           method: isCreating ? 'POST' : 'PUT',
-          headers: await buildAuthenticatedHeaders({ contentType: 'application/json' }),
+          headers: buildAuthHeaders(true),
           body: JSON.stringify(payload),
         }
       );
@@ -1759,7 +1898,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
       setIsSaving(true);
       const response = await fetch(`${API_BASE_URL}/admin/questionnaires/${selectedQuestionnaireId}`, {
         method: 'DELETE',
-        headers: await buildAuthenticatedHeaders(),
+        headers: buildAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -1820,7 +1959,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
           : `${API_BASE_URL}/admin/catalog/threats/${selectedCatalogThreatId}`,
         {
           method: isCreating ? 'POST' : 'PUT',
-          headers: await buildAuthenticatedHeaders({ contentType: 'application/json' }),
+          headers: buildAuthHeaders(true),
           body: JSON.stringify(payload),
         }
       );
@@ -1863,7 +2002,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
 
       const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/${selectedCatalogThreatId}`, {
         method: 'DELETE',
-        headers: await buildAuthenticatedHeaders(),
+        headers: buildAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -1894,7 +2033,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
 
       const response = await fetch(`${API_BASE_URL}/admin/catalog/threats/refresh`, {
         method: 'POST',
-        headers: await buildAuthenticatedHeaders(),
+        headers: buildAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -1972,6 +2111,7 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
           { key: 'cve_graph', label: 'Référentiel CVE', icon: Network },
           { key: 'references', label: 'Références', icon: LibraryBig },
           { key: 'traceability', label: 'Traçabilité', icon: History },
+          { key: 'regulatory', label: 'Base documentaire', icon: FileText },
         ]}
       />
 
@@ -2414,8 +2554,8 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
                       </CollapsePanel>
 
                       <CollapsePanel
-                        title="References associees"
-                        subtitle="Le code reste libre par menace, mais le nom de source se choisit depuis la liste maitre."
+                        title="Références associées"
+                        subtitle="Associez des codes de référence issus des frameworks de sécurité."
                         badge={`${selectedCatalogThreat.references.length} référence(s)`}
                         defaultOpen
                         action={
@@ -2424,78 +2564,78 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
                             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                           >
                             <Plus className="h-4 w-4" />
-                            Ajouter reference
+                            Ajouter référence
                           </button>
                         }
                       >
-                      <div className="space-y-4">
-                        {selectedCatalogThreat.references.map((reference) => (
-                          <div key={reference.id_reference} className="rounded-2xl border border-slate-200 p-4">
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                              <Field
-                                label="Code reference"
-                                value={reference.reference_menace}
-                                onChange={(value) =>
-                                  updateCatalogReference(reference.id_reference, (current) => ({
-                                    ...current,
-                                    reference_menace: value,
-                                  }))
-                                }
-                              />
-                              <Field
-                                label="Nom de la source"
-                                value={reference.nom_reference}
-                                onChange={(value) =>
-                                  updateCatalogReference(reference.id_reference, (current) => {
-                                    const selectedGroup = catalogReferenceGroups.find(
-                                      (group) => group.display_name === value
-                                    );
-                                    const sampleReference = catalogReferences.find(
-                                      (item) => item.nom_reference === value
-                                    );
-
-                                    return {
+                        <div className="space-y-3">
+                          {selectedCatalogThreat.references.map((reference) => (
+                            <div key={reference.id_reference} className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                              <div className="grid flex-1 grid-cols-1 gap-3 md:grid-cols-3">
+                                <Field
+                                  label="Code (ex: CWE-89, CAPEC-66)"
+                                  value={reference.reference_menace}
+                                  onChange={(value) =>
+                                    updateCatalogReference(reference.id_reference, (current) => ({
                                       ...current,
-                                      nom_reference: value,
-                                      lien: sampleReference?.lien ?? current.lien,
-                                      id_reference:
-                                        selectedGroup && sampleReference
+                                      reference_menace: value,
+                                    }))
+                                  }
+                                />
+                                <Field
+                                  label="Framework source"
+                                  value={reference.nom_reference}
+                                  onChange={(value) =>
+                                    updateCatalogReference(reference.id_reference, (current) => {
+                                      const sampleReference = catalogReferences.find(
+                                        (item) => item.nom_reference === value
+                                      );
+                                      return {
+                                        ...current,
+                                        nom_reference: value,
+                                        lien: sampleReference?.lien ?? current.lien,
+                                        id_reference: sampleReference
                                           ? sampleReference.id_reference
                                           : current.id_reference,
-                                    };
-                                  })
-                                }
-                                options={catalogReferenceGroups.map((group) => group.display_name)}
-                              />
-                              <Field
-                                label="Lien"
-                                value={reference.lien ?? ''}
-                                onChange={(value) =>
-                                  updateCatalogReference(reference.id_reference, (current) => ({
-                                    ...current,
-                                    lien: value,
-                                  }))
-                                }
-                              />
-                            </div>
-
-                            <div className="mt-3 flex justify-end">
+                                      };
+                                    })
+                                  }
+                                  options={['', ...catalogReferenceGroups.map((g) => g.display_name)]}
+                                />
+                                <label className="block">
+                                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Lien spécifique
+                                  </span>
+                                  <div className="flex w-full items-center rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 text-sm">
+                                    {reference.lien_specifique || reference.lien ? (
+                                      <a
+                                        href={reference.lien_specifique || reference.lien || '#'}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="truncate text-blue-600 hover:underline"
+                                      >
+                                        {reference.lien_specifique || reference.lien}
+                                      </a>
+                                    ) : (
+                                      <span className="italic text-slate-400">Auto-généré à la sauvegarde</span>
+                                    )}
+                                  </div>
+                                </label>
+                              </div>
                               <button
                                 onClick={() => handleDeleteCatalogReference(reference.id_reference)}
-                                className="rounded-lg p-2 text-red-500 transition hover:bg-red-50"
+                                className="mt-7 shrink-0 rounded-lg p-2 text-red-400 transition hover:bg-red-50 hover:text-red-600"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </button>
                             </div>
-                          </div>
-                        ))}
-
-                        {selectedCatalogThreat.references.length === 0 && (
-                          <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
-                            Aucune reference associee.
-                          </p>
-                        )}
-                      </div>
+                          ))}
+                          {selectedCatalogThreat.references.length === 0 && (
+                            <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                              Aucun code de référence ajouté. Cliquez sur "Ajouter référence" pour en associer un.
+                            </p>
+                          )}
+                        </div>
                       </CollapsePanel>
                     </div>
                   </>
@@ -3883,7 +4023,18 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
                     >
                       <span className="truncate font-semibold text-slate-900">{reference.reference_menace}</span>
                       <span className="truncate text-slate-700">{reference.nom_reference}</span>
-                      <span className="truncate text-slate-500">{reference.lien || 'Lien non renseigne'}</span>
+                      {(reference.lien_specifique || reference.lien) ? (
+                        <a
+                          href={reference.lien_specifique || reference.lien || '#'}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="truncate text-blue-600 hover:underline text-xs self-center"
+                        >
+                          {reference.lien_specifique || reference.lien}
+                        </a>
+                      ) : (
+                        <span className="truncate italic text-slate-400">Lien non renseigné</span>
+                      )}
                       <div className="flex items-center justify-end gap-2">
                         <button
                           onClick={() => handleEditReferenceRecord(reference)}
@@ -3903,6 +4054,408 @@ export function AdminPage({ currentUserName, onLogout }: Readonly<AdminPageProps
                 </div>
               </div>
             </div>
+
+            <div className="mt-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="mb-5">
+                <h2 className="text-xl font-bold text-slate-900">Mapping frameworks par menace</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Vue complète de l'association entre chaque menace et les référentiels de sécurité.
+                </p>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className="px-4 py-3 text-left">Menace</th>
+                      <th className="px-3 py-3 text-left">OWASP</th>
+                      <th className="px-3 py-3 text-left">MITRE ATT&CK</th>
+                      <th className="px-3 py-3 text-left">MITRE ATLAS</th>
+                      <th className="px-3 py-3 text-left">CWE</th>
+                      <th className="px-3 py-3 text-left">CAPEC</th>
+                      <th className="px-3 py-3 text-left">NIST</th>
+                      <th className="px-3 py-3 text-left">ISO 27001</th>
+                      <th className="px-3 py-3 text-left">PCI DSS</th>
+                      <th className="px-3 py-3 text-left">CCM</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {allFrameworkMappings.map((m) => (
+                      <tr key={m.id_menace} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 font-semibold text-slate-900 max-w-[200px] truncate">{m.nom_menace}</td>
+                        {(['owasp','mitre_attack','mitre_atlas','cwe','capec','nist_ref','iso27001','pci_dss','ccm_ref'] as (keyof ThreatFrameworkMapping)[]).map((f) => (
+                          <td key={f} className="px-3 py-3 text-slate-600 max-w-[120px] truncate">
+                            {(m[f] as string) || <span className="text-slate-300">—</span>}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    {allFrameworkMappings.length === 0 && (
+                      <tr>
+                        <td colSpan={10} className="px-4 py-6 text-center text-sm text-slate-400">
+                          Aucun mapping disponible.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeSection === 'regulatory' && (
+          <>
+            <AdminHeader
+              eyebrow="Base documentaire"
+              title="Base documentaire du chatbot"
+              description="Gérez tous les contenus sur lesquels s'appuie le chatbot : documents indexés, FAQ et guides interactifs."
+            />
+
+            {/* Onglets */}
+            <div className="mb-6 flex gap-2 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm w-fit">
+              {([
+                { id: 'regulatory', label: 'Documents réglementaires', icon: FileText },
+                { id: 'faq',        label: 'FAQ chatbot',               icon: MessageCircleMore },
+                { id: 'guides',     label: 'Guides interactifs',         icon: BookOpen },
+              ] as const).map(tab => (
+                <button key={tab.id} type="button"
+                  onClick={() => setKnowledgeTab(tab.id)}
+                  className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${knowledgeTab === tab.id ? 'bg-slate-900 text-white shadow' : 'text-slate-500 hover:text-slate-800'}`}>
+                  <tab.icon className="h-4 w-4" />
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* ── ONGLET DOCUMENTS RÉGLEMENTAIRES ── */}
+            {knowledgeTab === 'regulatory' && (
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1.4fr]">
+                {/* Formulaire upload */}
+                <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <h2 className="mb-1 text-xl font-bold text-slate-900">Ajouter un document</h2>
+                  <p className="mb-5 text-sm text-slate-500">PDF uniquement (max 50 Mo). Indexé automatiquement dans Qdrant.</p>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold text-slate-700">Nom du document</label>
+                      <input type="text" value={regulatoryUploadName} onChange={e => setRegulatoryUploadName(e.target.value)}
+                        placeholder="ex: PCI-DSS v4.0.1"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-orange-400 focus:bg-white focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold text-slate-700">Catégorie</label>
+                      <select value={regulatoryUploadCategory} onChange={e => setRegulatoryUploadCategory(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-orange-400 focus:bg-white focus:outline-none">
+                        <option value="">-- Choisir --</option>
+                        {['PCI-DSS','Loi marocaine','Directive BAM','ISO','NIST','DORA','Autre'].map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold text-slate-700">Fichier PDF</label>
+                      <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 transition hover:border-orange-400 hover:bg-orange-50">
+                        <Upload className="h-5 w-5 shrink-0 text-slate-400" />
+                        <span className="truncate text-sm text-slate-500">{regulatoryUploadFile ? regulatoryUploadFile.name : 'Cliquer pour sélectionner'}</span>
+                        <input type="file" accept=".pdf" className="hidden" onChange={e => setRegulatoryUploadFile(e.target.files?.[0] ?? null)} />
+                      </label>
+                    </div>
+                    <button onClick={() => void handleUploadRegulatoryDoc()} disabled={isUploadingDoc || !regulatoryUploadFile}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-orange-600 disabled:opacity-50">
+                      <Upload className="h-4 w-4" />
+                      {isUploadingDoc ? 'Indexation en cours...' : 'Uploader et indexer'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Liste documents + raccourcis */}
+                <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <div className="mb-5 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-bold text-slate-900">Documents indexés</h2>
+                      <p className="mt-1 text-sm text-slate-500">{regulatoryDocs.length} document(s) — {regulatoryDocs.filter(d => d.status === 'indexed').length} actifs</p>
+                    </div>
+                  </div>
+                  {regulatoryDocs.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                      <FileText className="mx-auto mb-3 h-8 w-8 text-slate-300" />Aucun document.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {regulatoryDocs.map(doc => (
+                        <div key={doc.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <FileText className="h-4 w-4 shrink-0 text-orange-500" />
+                                <p className="truncate font-semibold text-slate-900">{doc.display_name}</p>
+                                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{doc.category}</span>
+                                {doc.status === 'indexed' && <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">{doc.chunk_count} chunks</span>}
+                                {doc.status === 'indexing' && <span className="shrink-0 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">En cours...</span>}
+                                {doc.status === 'error' && <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-600">Erreur</span>}
+                              </div>
+                              {doc.error_message && <p className="mt-1 text-xs text-red-500">{doc.error_message}</p>}
+                            </div>
+                            <button onClick={() => void handleDeleteRegulatoryDoc(doc.id, doc.display_name)}
+                              className="shrink-0 rounded-lg p-2 text-red-400 transition hover:bg-red-50 hover:text-red-600">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                          {/* Raccourcis chatbot */}
+                          <div className="mt-3 border-t border-slate-200 pt-3">
+                            <p className="mb-2 text-xs font-semibold text-slate-500">Raccourcis chatbot (suggestions affichées dans le chat)</p>
+                            {editingShortcutsDocId === doc.id ? (
+                              <div className="space-y-2">
+                                {editingShortcuts.map((s, i) => (
+                                  <div key={i} className="flex gap-2">
+                                    <input value={s} onChange={e => { const arr = [...editingShortcuts]; arr[i] = e.target.value; setEditingShortcuts(arr); }}
+                                      className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm focus:border-orange-400 focus:outline-none" />
+                                    <button type="button" onClick={() => setEditingShortcuts(editingShortcuts.filter((_, j) => j !== i))}
+                                      className="rounded-lg p-1.5 text-red-400 hover:bg-red-50"><X className="h-3.5 w-3.5" /></button>
+                                  </div>
+                                ))}
+                                <button type="button" onClick={() => setEditingShortcuts([...editingShortcuts, ''])}
+                                  className="flex items-center gap-1 text-xs font-semibold text-orange-600 hover:text-orange-700">
+                                  <Plus className="h-3.5 w-3.5" /> Ajouter un raccourci
+                                </button>
+                                <div className="flex gap-2 pt-1">
+                                  <button type="button" onClick={async () => { await updateDocShortcuts(doc.id, editingShortcuts.filter(s => s.trim())); await refreshRegulatoryDocs(); setEditingShortcutsDocId(null); }}
+                                    className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600">Enregistrer</button>
+                                  <button type="button" onClick={() => setEditingShortcutsDocId(null)}
+                                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Annuler</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap gap-1.5">
+                                {(doc.shortcuts ?? []).map((s: string, i: number) => (
+                                  <span key={i} className="rounded-full bg-orange-100 px-2.5 py-1 text-xs font-medium text-orange-700">{s}</span>
+                                ))}
+                                <button type="button" onClick={() => { setEditingShortcutsDocId(doc.id); setEditingShortcuts([...(doc.shortcuts ?? [])]); }}
+                                  className="flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500 hover:border-orange-400 hover:text-orange-600">
+                                  <Edit2 className="h-3 w-3" /> Modifier
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── ONGLET FAQ CHATBOT ── */}
+            {knowledgeTab === 'faq' && (
+              <div className="space-y-6">
+                {/* Formulaire ajout */}
+                <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <h2 className="mb-4 text-lg font-bold text-slate-900">Ajouter une entrée FAQ</h2>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Catégorie</label>
+                      <select value={newFaq.category} onChange={e => setNewFaq(f => ({ ...f, category: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none">
+                        {['about','navigation','form','reports','validation'].map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Action ID (optionnel)</label>
+                      <select value={newFaq.action_id ?? ''} onChange={e => setNewFaq(f => ({ ...f, action_id: e.target.value || null }))}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none">
+                        <option value="">Aucune action</option>
+                        {allActionIds.map(a => <option key={a} value={a}>{a}</option>)}
+                      </select>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Question (mots-clés reconnus)</label>
+                      <input value={newFaq.question} onChange={e => setNewFaq(f => ({ ...f, question: e.target.value }))}
+                        placeholder="ex: comment voir mes rapports"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Réponse du chatbot</label>
+                      <textarea value={newFaq.answer} onChange={e => setNewFaq(f => ({ ...f, answer: e.target.value }))} rows={3}
+                        placeholder="Réponse naturelle affichée par le chatbot"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                    </div>
+                  </div>
+                  <button type="button" onClick={async () => { if (!newFaq.question.trim() || !newFaq.answer.trim()) return; await createFaq(newFaq); await refreshFaq(); setNewFaq({ category: 'about', question: '', answer: '', action_id: null, action_label: null, is_active: true }); }}
+                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-600">
+                    <Plus className="h-4 w-4" /> Ajouter
+                  </button>
+                </div>
+
+                {/* Liste FAQ par catégorie */}
+                {(['about','navigation','form','reports','validation'] as const).map(cat => {
+                  const items = faqItems.filter(f => f.category === cat);
+                  if (!items.length) return null;
+                  return (
+                    <div key={cat} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                      <h3 className="mb-4 text-base font-bold capitalize text-slate-800">{cat} <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">{items.length}</span></h3>
+                      <div className="space-y-3">
+                        {items.map(item => (
+                          <div key={item.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                            {editingFaq?.id === item.id ? (
+                              <div className="space-y-3">
+                                <input value={editingFaq.question} onChange={e => setEditingFaq(f => f ? { ...f, question: e.target.value } : f)}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                                <textarea value={editingFaq.answer} onChange={e => setEditingFaq(f => f ? { ...f, answer: e.target.value } : f)} rows={3}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                                <div className="flex items-center gap-3">
+                                  <select value={editingFaq.action_id ?? ''} onChange={e => setEditingFaq(f => f ? { ...f, action_id: e.target.value || null } : f)}
+                                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:border-orange-400 focus:outline-none">
+                                    <option value="">Aucune action</option>
+                                    {allActionIds.map(a => <option key={a} value={a}>{a}</option>)}
+                                  </select>
+                                  <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+                                    <input type="checkbox" checked={editingFaq.is_active} onChange={e => setEditingFaq(f => f ? { ...f, is_active: e.target.checked } : f)} className="rounded" />
+                                    Actif
+                                  </label>
+                                  <button type="button" onClick={async () => { await updateFaq(item.id, { question: editingFaq.question, answer: editingFaq.answer, action_id: editingFaq.action_id, is_active: editingFaq.is_active }); await refreshFaq(); setEditingFaq(null); }}
+                                    className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600">Enregistrer</button>
+                                  <button type="button" onClick={() => setEditingFaq(null)}
+                                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Annuler</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-semibold text-slate-800">{item.question}</p>
+                                  <p className="mt-1 text-sm text-slate-500 line-clamp-2">{item.answer}</p>
+                                  <div className="mt-2 flex flex-wrap gap-1.5">
+                                    {item.action_id && <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-700">{item.action_id}</span>}
+                                    {!item.is_active && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-600">Inactif</span>}
+                                  </div>
+                                </div>
+                                <div className="flex shrink-0 gap-1">
+                                  <button type="button" onClick={() => setEditingFaq({ ...item })}
+                                    className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><Edit2 className="h-4 w-4" /></button>
+                                  <button type="button" onClick={async () => { await deleteFaq(item.id); await refreshFaq(); }}
+                                    className="rounded-lg p-2 text-red-400 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* ── ONGLET GUIDES INTERACTIFS ── */}
+            {knowledgeTab === 'guides' && (
+              <div className="space-y-6">
+                <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <h2 className="mb-1 text-lg font-bold text-slate-900">Ajouter une étape de guide</h2>
+                  <p className="mb-4 text-sm text-slate-500">Les étapes sont affichées séquentiellement lors du déclenchement du guide correspondant.</p>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Guide</label>
+                      <select value={allTourIds.includes(newStep.tour_id) ? newStep.tour_id : '__custom__'}
+                        onChange={e => {
+                          if (e.target.value === '__custom__') setNewStep(s => ({ ...s, tour_id: '' }));
+                          else setNewStep(s => ({ ...s, tour_id: e.target.value }));
+                        }}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none">
+                        {allTourIds.map(t => <option key={t} value={t}>{t}</option>)}
+                        <option value="__custom__">+ Nouveau guide personnalisé...</option>
+                      </select>
+                      {(!allTourIds.includes(newStep.tour_id) || newStep.tour_id === '') && (
+                        <input
+                          value={newStep.tour_id}
+                          onChange={e => setNewStep(s => ({ ...s, tour_id: e.target.value.toUpperCase().replace(/\s+/g, '_') }))}
+                          placeholder="ex: TOUR_SECURITE"
+                          className="mt-2 w-full rounded-xl border border-orange-300 bg-white px-3 py-2 text-sm font-mono focus:border-orange-500 focus:outline-none"
+                        />
+                      )}
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Ordre</label>
+                      <input type="number" min={1} value={newStep.step_order} onChange={e => setNewStep(s => ({ ...s, step_order: Number(e.target.value) }))}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Section navigatée (optionnel)</label>
+                      <select value={newStep.nav_section ?? ''} onChange={e => setNewStep(s => ({ ...s, nav_section: e.target.value || null }))}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none">
+                        <option value="">Aucune</option>
+                        {allNavSections.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Titre</label>
+                      <input value={newStep.title} onChange={e => setNewStep(s => ({ ...s, title: e.target.value }))} placeholder="ex: Menu de navigation"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">Description</label>
+                      <input value={newStep.description} onChange={e => setNewStep(s => ({ ...s, description: e.target.value }))} placeholder="Texte affiché à l'ingénieur"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                    </div>
+                  </div>
+                  <button type="button" onClick={async () => { if (!newStep.title.trim() || !newStep.description.trim()) return; await createGuideStep(newStep); await refreshGuideSteps(); setNewStep({ tour_id: 'TOUR_ANALYSE', step_order: 1, title: '', description: '', nav_section: null, target: null }); }}
+                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-600">
+                    <Plus className="h-4 w-4" /> Ajouter l'étape
+                  </button>
+                </div>
+
+                {/* Liste par guide */}
+                {['TOUR_ANALYSE','TOUR_HISTORY','TOUR_DASHBOARD'].map(tourId => {
+                  const steps = guideSteps.filter(s => s.tour_id === tourId).sort((a, b) => a.step_order - b.step_order);
+                  const labels: Record<string, string> = { TOUR_ANALYSE: 'Faire une nouvelle analyse', TOUR_HISTORY: 'Consulter mes rapports', TOUR_DASHBOARD: 'Voir le Dashboard' };
+                  return (
+                    <div key={tourId} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                      <h3 className="mb-4 text-base font-bold text-slate-800">{labels[tourId]} <span className="ml-1 text-sm font-normal text-slate-400">({tourId})</span></h3>
+                      {steps.length === 0 ? (
+                        <p className="text-sm text-slate-400">Aucune étape.</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {steps.map((step, idx) => (
+                            <div key={step.id} className="flex items-start gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-orange-100 text-xs font-bold text-orange-700">{idx + 1}</span>
+                              {editingStep?.id === step.id ? (
+                                <div className="flex-1 space-y-2">
+                                  <input value={editingStep.title} onChange={e => setEditingStep(s => s ? { ...s, title: e.target.value } : s)}
+                                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                                  <input value={editingStep.description} onChange={e => setEditingStep(s => s ? { ...s, description: e.target.value } : s)}
+                                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:border-orange-400 focus:outline-none" />
+                                  <div className="flex items-center gap-3">
+                                    <select value={editingStep.nav_section ?? ''} onChange={e => setEditingStep(s => s ? { ...s, nav_section: e.target.value || null } : s)}
+                                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:border-orange-400 focus:outline-none">
+                                      <option value="">Aucune section</option>
+                                      {allNavSections.map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                    <button type="button" onClick={async () => { await updateGuideStep(step.id, { title: editingStep.title, description: editingStep.description, nav_section: editingStep.nav_section }); await refreshGuideSteps(); setEditingStep(null); }}
+                                      className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600">Enregistrer</button>
+                                    <button type="button" onClick={() => setEditingStep(null)}
+                                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Annuler</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex flex-1 items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-800">{step.title}</p>
+                                    <p className="mt-0.5 text-sm text-slate-500">{step.description}</p>
+                                    {step.nav_section && <span className="mt-1 inline-block rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-600">→ {step.nav_section}</span>}
+                                  </div>
+                                  <div className="flex shrink-0 gap-1">
+                                    <button type="button" onClick={() => setEditingStep({ ...step })}
+                                      className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><Edit2 className="h-4 w-4" /></button>
+                                    <button type="button" onClick={async () => { await deleteGuideStep(step.id); await refreshGuideSteps(); }}
+                                      className="rounded-lg p-2 text-red-400 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </main>

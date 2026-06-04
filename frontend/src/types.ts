@@ -8,6 +8,11 @@ export interface AnalysisSubmitPayload {
   dev_name?: string;
 }
 
+export interface SecOpsChatStepContext {
+  title: string;
+  questions: { code: string; label: string }[];
+}
+
 export interface SecOpsChatDraftContext {
   app_name?: string;
   app_description?: string;
@@ -15,6 +20,7 @@ export interface SecOpsChatDraftContext {
   questionnaire_code?: string;
   answers?: AnswersMap;
   active_question?: SecOpsChatQuestionContext;
+  questionnaire_steps?: SecOpsChatStepContext[];
 }
 
 export interface SecOpsChatQuestionOptionContext {
@@ -227,6 +233,7 @@ export interface CatalogReference {
   reference_menace: string;
   nom_reference: string;
   lien?: string | null;
+  lien_specifique?: string | null;
 }
 
 export interface CatalogReferenceGroup {
@@ -280,6 +287,46 @@ export interface CatalogReferenceInput {
   reference_menace: string;
   nom_reference: string;
   lien?: string | null;
+}
+
+export interface RegulatoryDocument {
+  id: number;
+  display_name: string;
+  category: string;
+  original_filename: string;
+  file_size: number | null;
+  chunk_count: number;
+  status: 'indexing' | 'indexed' | 'error';
+  error_message: string | null;
+  uploaded_at: string;
+  indexed_at: string | null;
+  uploaded_by: string | null;
+  shortcuts: string[];
+}
+
+export interface ThreatFrameworkMapping {
+  id_menace: number;
+  nom_menace?: string | null;
+  cwe?: string | null;
+  cwe_lien?: string | null;
+  mitre_atlas?: string | null;
+  mitre_atlas_lien?: string | null;
+  mitre_attack?: string | null;
+  mitre_attack_lien?: string | null;
+  mitre_ics?: string | null;
+  mitre_ics_lien?: string | null;
+  mitre_cloud?: string | null;
+  mitre_cloud_lien?: string | null;
+  capec?: string | null;
+  capec_lien?: string | null;
+  owasp?: string | null;
+  owasp_lien?: string | null;
+  emb3d?: string | null;
+  emb3d_lien?: string | null;
+  nist_ref?: string | null;
+  iso27001?: string | null;
+  pci_dss?: string | null;
+  ccm_ref?: string | null;
 }
 
 export interface CatalogThreatUpsertPayload {
@@ -420,6 +467,45 @@ export interface EditableThreat {
   references?: CatalogReference[];
 }
 
+export interface DfdLayout {
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  rotate?: number;
+  curve?: number;
+  strokeWidth?: number;
+  dashLength?: number;
+  dashGap?: number;
+}
+
+export interface DfdBoundaryFile {
+  name: string;
+  layout?: DfdLayout;
+}
+
+export interface DfdNodeFile {
+  name: string;
+  boundary: string;
+  layout?: DfdLayout;
+}
+
+export interface DfdFlowFile {
+  source: string;
+  target: string;
+  label: string;
+  source_handle?: string;
+  target_handle?: string;
+}
+
+export interface StructuredDfd {
+  boundaries: DfdBoundaryFile[];
+  external_entities: DfdNodeFile[];
+  processes: DfdNodeFile[];
+  data_stores: DfdNodeFile[];
+  data_flows: DfdFlowFile[];
+}
+
 export interface ReportResultVersionRecord {
   version_number: number;
   version_label: string;
@@ -427,6 +513,7 @@ export interface ReportResultVersionRecord {
   developer_name: string;
   application_description: string;
   selected_threats: EditableThreat[];
+  dfd_json: StructuredDfd;
   dfd_image_path?: string | null;
   dfd_reference?: string | null;
   download_url?: string | null;
@@ -442,6 +529,7 @@ export interface ReportResultsPayload {
   application_description: string;
   selected_threats: EditableThreat[];
   application_version?: string;
+  dfd_json: StructuredDfd;
   dfd_image_path?: string | null;
   dfd_reference?: string | null;
   modification_reasons?: SecOpsModificationReason[];

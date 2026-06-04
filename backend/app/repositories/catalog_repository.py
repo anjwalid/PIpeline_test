@@ -159,7 +159,8 @@ class CatalogRepository:
                         id_reference,
                         reference_menace,
                         nom_reference,
-                        lien
+                        lien,
+                        lien_specifique
                     FROM reference_menace
                     ORDER BY LOWER(nom_reference), LOWER(reference_menace), id_reference
                     """
@@ -518,7 +519,8 @@ class CatalogRepository:
                 r.id_reference,
                 r.reference_menace,
                 r.nom_reference,
-                r.lien
+                r.lien,
+                r.lien_specifique
             FROM menace_reference mr
             INNER JOIN reference_menace r ON r.id_reference = mr.id_reference
             WHERE mr.id_menace = %s
@@ -552,5 +554,91 @@ class CatalogRepository:
                     CatalogRepository._fetch_threat(cur, row["id_menace"])
                     for row in threat_ids
                 ]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_framework_mapping(threat_id: int):
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT r.*, m.nom_menace
+                    FROM menace_refs_mapping r
+                    JOIN menace m ON m.id_menace = r.id_menace
+                    WHERE r.id_menace = %s
+                    """,
+                    (threat_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return dict(row)
+                cur.execute(
+                    "SELECT nom_menace FROM menace WHERE id_menace = %s",
+                    (threat_id,),
+                )
+                menace = cur.fetchone()
+                if not menace:
+                    return None
+                return {"id_menace": threat_id, "nom_menace": menace["nom_menace"]}
+        finally:
+            conn.close()
+
+    @staticmethod
+    def list_all_framework_mappings():
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT m.id_menace, m.nom_menace,
+                           r.cwe, r.cwe_lien, r.mitre_atlas, r.mitre_atlas_lien,
+                           r.mitre_attack, r.mitre_attack_lien, r.mitre_ics, r.mitre_ics_lien,
+                           r.mitre_cloud, r.mitre_cloud_lien, r.capec, r.capec_lien,
+                           r.owasp, r.owasp_lien, r.emb3d, r.emb3d_lien,
+                           r.nist_ref, r.iso27001, r.pci_dss, r.ccm_ref
+                    FROM menace m
+                    LEFT JOIN menace_refs_mapping r ON r.id_menace = m.id_menace
+                    ORDER BY LOWER(m.nom_menace)
+                    """
+                )
+                return [dict(row) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def upsert_framework_mapping(threat_id: int, data: dict):
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id_menace FROM menace_refs_mapping WHERE id_menace = %s",
+                    (threat_id,),
+                )
+                exists = cur.fetchone()
+                fields = [
+                    "cwe", "cwe_lien", "mitre_atlas", "mitre_atlas_lien",
+                    "mitre_attack", "mitre_attack_lien", "mitre_ics", "mitre_ics_lien",
+                    "mitre_cloud", "mitre_cloud_lien", "capec", "capec_lien",
+                    "owasp", "owasp_lien", "emb3d", "emb3d_lien",
+                    "nist_ref", "iso27001", "pci_dss", "ccm_ref",
+                ]
+                values = [data.get(field) or None for field in fields]
+                if exists:
+                    set_clause = ", ".join(f"{field} = %s" for field in fields)
+                    cur.execute(
+                        f"UPDATE menace_refs_mapping SET {set_clause}, updated_at = NOW() WHERE id_menace = %s",
+                        values + [threat_id],
+                    )
+                else:
+                    columns = ", ".join(fields)
+                    placeholders = ", ".join(["%s"] * len(fields))
+                    cur.execute(
+                        f"INSERT INTO menace_refs_mapping (id_menace, {columns}) VALUES (%s, {placeholders})",
+                        [threat_id] + values,
+                    )
+                conn.commit()
+                return CatalogRepository.get_framework_mapping(threat_id)
         finally:
             conn.close()

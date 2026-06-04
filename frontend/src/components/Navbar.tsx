@@ -47,6 +47,7 @@ interface NavbarProps<TSection extends string = string> {
   notificationCenter?: NavbarNotificationCenter | null;
   backAction?: NavbarBackAction | null;
   onNotificationOpenChange?: (isOpen: boolean) => void;
+  forceOpen?: boolean;
 }
 
 export function Navbar<TSection extends string = string>({
@@ -58,6 +59,7 @@ export function Navbar<TSection extends string = string>({
   notificationCenter,
   backAction,
   onNotificationOpenChange,
+  forceOpen = false,
 }: Readonly<NavbarProps<TSection>>) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
@@ -73,6 +75,10 @@ export function Navbar<TSection extends string = string>({
     globalThis.addEventListener('keydown', handleEscape);
     return () => globalThis.removeEventListener('keydown', handleEscape);
   }, []);
+
+  useEffect(() => {
+    setIsMenuOpen(forceOpen);
+  }, [forceOpen]);
 
   const navigate = (section: TSection) => {
     onNavigate(section);
@@ -103,6 +109,7 @@ export function Navbar<TSection extends string = string>({
               <button
                 type="button"
                 onClick={() => setIsMenuOpen((prev) => !prev)}
+                data-guide-target="nav-menu"
                 className="group flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 hover:shadow-sm active:scale-[0.98]"
                 aria-label="Ouvrir le menu"
                 aria-expanded={isMenuOpen}
@@ -295,6 +302,7 @@ export function Navbar<TSection extends string = string>({
                     <button
                       key={item.key}
                       onClick={() => navigate(item.key)}
+                      data-guide-target={String(item.key)}
                       className={`group w-full rounded-2xl border px-4 py-3.5 text-left transition-all duration-200 ${
                         isActive
                           ? 'border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-900/10'

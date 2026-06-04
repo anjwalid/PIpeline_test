@@ -34,7 +34,10 @@ export function HistoryView({
   subtitle = 'Consultez les anciennes analyses et reutilisez leurs rapports.',
 }: Readonly<HistoryViewProps>) {
   return (
-    <div className="max-w-[980px] mx-auto px-6 pt-36 pb-12">
+    <div
+      className="max-w-[980px] mx-auto px-6 pt-36 pb-12"
+      data-guide-target="history"
+    >
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
         <div>
           <h1 className="font-sans font-extrabold text-[30px] text-text-primary">{title}</h1>
@@ -63,7 +66,7 @@ export function HistoryView({
           </p>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <div className="grid gap-4" data-guide-target="history-list">
           {history.map((item) => (
             <article
               key={item.id}

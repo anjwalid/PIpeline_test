@@ -10,7 +10,11 @@ import { ValidationView } from '../../components/ValidationView';
 import { HistoryView } from '../../components/HistoryView';
 import { DashboardView } from '../../components/DashboardView';
 import { SecOpsChatbot } from '../../components/SecOpsChatbot';
+import { SpotlightOverlay } from '../../components/SpotlightOverlay';
+import type { SpotlightStep } from '../../components/SpotlightOverlay';
+import { WelcomeGuideCard } from '../../components/WelcomeGuideCard';
 import { API_BASE_URL } from '../../config';
+import { fetchGuideSteps } from '../../api/knowledge';
 import {
   deleteReport,
   fetchMyReports,
@@ -35,6 +39,30 @@ interface ApiErrorDetail {
   blocked_entity?: string;
   guardrail_name?: string;
 }
+
+interface TourStep extends SpotlightStep {
+  navigateTo?: { section: SecOpsSection; viewState?: ViewState };
+  needsMenuOpen?: boolean;
+}
+
+const TOURS_FALLBACK: Record<string, TourStep[]> = {
+  TOUR_ANALYSE: [
+    { target: 'nav-menu', title: 'Menu de navigation', description: 'Cliquez pour ouvrir le menu.' },
+    { target: 'analysis', title: 'Nouvelle analyse', description: "Lancez le questionnaire d'analyse.", navigateTo: { section: 'analysis', viewState: 'form' }, needsMenuOpen: true },
+    { target: 'form-app-name', title: "Nom de l'application", description: "Commencez par renseigner le nom de l'application." },
+    { target: 'form-nav-buttons', title: 'Navigation du questionnaire', description: "Utilisez Suivant pour avancer jusqu'au lancement de l'analyse." },
+  ],
+  TOUR_HISTORY: [
+    { target: 'nav-menu', title: 'Menu de navigation', description: 'Cliquez pour ouvrir le menu.' },
+    { target: 'history', title: 'Historique', description: 'Retrouvez ici tous vos rapports.', navigateTo: { section: 'history' }, needsMenuOpen: true },
+    { target: 'history-list', title: 'Liste des rapports', description: 'Ouvrez, modifiez ou supprimez vos brouillons depuis cette vue.' },
+  ],
+  TOUR_DASHBOARD: [
+    { target: 'nav-menu', title: 'Menu de navigation', description: 'Cliquez pour ouvrir le menu.' },
+    { target: 'dashboard', title: 'Dashboard', description: "Vue d'ensemble de votre activite.", navigateTo: { section: 'dashboard' }, needsMenuOpen: true },
+    { target: 'dashboard-stats', title: 'Indicateurs', description: 'Ces cartes resument les analyses et validations.' },
+  ],
+};
 
 const STATUS_LABELS = {
   DRAFT: 'Brouillon',
@@ -163,6 +191,10 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
   const [returnSection, setReturnSection] = useState<Extract<SecOpsSection, 'dashboard' | 'history'>>('dashboard');
   const [notificationsReadAt, setNotificationsReadAt] = useState<string | null>(null);
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
+  const [activeTourSteps, setActiveTourSteps] = useState<TourStep[]>([]);
+  const [tourStepIndex, setTourStepIndex] = useState(0);
+  const [menuForceOpen, setMenuForceOpen] = useState(false);
+  const [toursFromDb, setToursFromDb] = useState<Record<string, TourStep[]>>(TOURS_FALLBACK);
   const currentReport = history.find((report) => report.id === currentReportId);
   const notificationStorageKey = `awb.secops.notifications.readAt.${currentUserName}`;
   const dismissedNotificationStorageKey = `awb.secops.notifications.dismissed.${currentUserName}`;
@@ -196,6 +228,40 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
   useEffect(() => {
     checkApiConnection();
     void loadMyReports();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const steps = await fetchGuideSteps();
+        if (!steps.length) {
+          return;
+        }
+
+        const grouped: Record<string, TourStep[]> = {};
+        for (const step of steps) {
+          if (!grouped[step.tour_id]) {
+            grouped[step.tour_id] = [];
+          }
+          grouped[step.tour_id].push({
+            target: step.target ?? step.nav_section ?? step.tour_id.toLowerCase(),
+            title: step.title,
+            description: step.description,
+            navigateTo:
+              step.nav_section === 'analysis' ||
+              step.nav_section === 'history' ||
+              step.nav_section === 'dashboard'
+                ? { section: step.nav_section }
+                : undefined,
+            needsMenuOpen: Boolean(step.nav_section),
+          });
+        }
+
+        setToursFromDb({ ...TOURS_FALLBACK, ...grouped });
+      } catch {
+        // Conserve le fallback local si l'API de connaissance n'est pas disponible.
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -417,6 +483,77 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
       void handleFormSubmit(formData);
     } else {
       handleNewAnalysis();
+    }
+  };
+
+  const applyTourStep = (step: TourStep) => {
+    if (step.navigateTo) {
+      setActiveSection(step.navigateTo.section);
+      if (step.navigateTo.viewState) {
+        setViewState(step.navigateTo.viewState);
+      }
+    }
+    setMenuForceOpen(step.needsMenuOpen ?? false);
+  };
+
+  const handleStartTour = (tourId: string) => {
+    const steps = toursFromDb[tourId];
+    if (!steps?.length) {
+      return;
+    }
+
+    applyTourStep(steps[0]);
+    setActiveTourSteps(steps);
+    setTourStepIndex(0);
+  };
+
+  const handleTourNext = () => {
+    const nextIndex = tourStepIndex + 1;
+    if (nextIndex >= activeTourSteps.length) {
+      setActiveTourSteps([]);
+      setTourStepIndex(0);
+      setMenuForceOpen(false);
+      return;
+    }
+
+    applyTourStep(activeTourSteps[nextIndex]);
+    setTourStepIndex(nextIndex);
+  };
+
+  const handleTourPrev = () => {
+    if (tourStepIndex === 0) {
+      return;
+    }
+
+    const previousIndex = tourStepIndex - 1;
+    applyTourStep(activeTourSteps[previousIndex]);
+    setTourStepIndex(previousIndex);
+  };
+
+  const endTour = () => {
+    setActiveTourSteps([]);
+    setTourStepIndex(0);
+    setMenuForceOpen(false);
+  };
+
+  const handleGuideNavigate = (section: string) => {
+    if (section === 'nav-menu') {
+      setActiveTourSteps([
+        {
+          target: 'nav-menu',
+          title: 'Menu de navigation',
+          description: "Ce bouton ouvre l'ensemble des sections disponibles.",
+        },
+      ]);
+      setTourStepIndex(0);
+      return;
+    }
+
+    if (section === 'analysis' || section === 'history' || section === 'dashboard') {
+      setActiveSection(section);
+      if (section === 'analysis') {
+        setViewState('form');
+      }
     }
   };
 
@@ -687,6 +824,7 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
         isDemoMode={isDemoMode}
         isApiConnected={isDemoMode || isApiConnected}
         currentUserName={currentUserName}
+        forceOpen={menuForceOpen}
         navItems={[
           { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
           { key: 'analysis', label: 'Nouvelle analyse', icon: Layers3 },
@@ -703,7 +841,23 @@ export function SecOpsPage({ currentUserName, onLogout }: Readonly<SecOpsPagePro
       <SecOpsChatbot
         reportId={currentReportId || undefined}
         draftContext={chatDraftContext}
+        currentSection={activeSection}
+        viewState={activeSection === 'analysis' ? viewState : undefined}
+        onGuideNavigate={handleGuideNavigate}
+        onStartTour={handleStartTour}
       />
+
+      {activeTourSteps.length > 0 && (
+        <SpotlightOverlay
+          steps={activeTourSteps}
+          currentIndex={tourStepIndex}
+          onPrev={handleTourPrev}
+          onNext={handleTourNext}
+          onDismiss={endTour}
+        />
+      )}
+
+      <WelcomeGuideCard currentUserName={currentUserName} onStartTour={handleStartTour} />
     </div>
   );
 }

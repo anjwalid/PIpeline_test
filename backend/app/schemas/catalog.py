@@ -55,6 +55,7 @@ class CatalogReferenceResponse(BaseModel):
     reference_menace: str
     nom_reference: str
     lien: Optional[str] = None
+    lien_specifique: Optional[str] = None
 
 
 class InternalSecuritySolutionResponse(BaseModel):
@@ -98,3 +99,51 @@ class CatalogThreatListItemResponse(BaseModel):
 class CatalogRefreshResponse(BaseModel):
     status: str
     message: str
+
+
+class ThreatFrameworkMappingRequest(BaseModel):
+    cwe: Optional[str] = None
+    cwe_lien: Optional[str] = None
+    mitre_atlas: Optional[str] = None
+    mitre_atlas_lien: Optional[str] = None
+    mitre_attack: Optional[str] = None
+    mitre_attack_lien: Optional[str] = None
+    mitre_ics: Optional[str] = None
+    mitre_ics_lien: Optional[str] = None
+    mitre_cloud: Optional[str] = None
+    mitre_cloud_lien: Optional[str] = None
+    capec: Optional[str] = None
+    capec_lien: Optional[str] = None
+    owasp: Optional[str] = None
+    owasp_lien: Optional[str] = None
+    emb3d: Optional[str] = None
+    emb3d_lien: Optional[str] = None
+    nist_ref: Optional[str] = None
+    iso27001: Optional[str] = None
+    pci_dss: Optional[str] = None
+    ccm_ref: Optional[str] = None
+
+
+class ThreatFrameworkMappingResponse(BaseModel):
+    id_menace: int
+    nom_menace: Optional[str] = None
+    cwe: Optional[str] = None
+    cwe_lien: Optional[str] = None
+    mitre_atlas: Optional[str] = None
+    mitre_atlas_lien: Optional[str] = None
+    mitre_attack: Optional[str] = None
+    mitre_attack_lien: Optional[str] = None
+    mitre_ics: Optional[str] = None
+    mitre_ics_lien: Optional[str] = None
+    mitre_cloud: Optional[str] = None
+    mitre_cloud_lien: Optional[str] = None
+    capec: Optional[str] = None
+    capec_lien: Optional[str] = None
+    owasp: Optional[str] = None
+    owasp_lien: Optional[str] = None
+    emb3d: Optional[str] = None
+    emb3d_lien: Optional[str] = None
+    nist_ref: Optional[str] = None
+    iso27001: Optional[str] = None
+    pci_dss: Optional[str] = None
+    ccm_ref: Optional[str] = None

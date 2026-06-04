@@ -7,6 +7,7 @@ import { clearApplicationSession, performStrongLogout } from './auth/session';
 import { SecOpsPage } from './pages/secops/SecOpsPage';
 import { ManagerPage } from './pages/manager/ManagerPage';
 import { AdminPage } from './pages/admin/AdminPage';
+import { DfdRenderPage } from './pages/DfdRenderPage';
 import { replaceBrowserPath } from './utils/navigation';
 
 let authInitPromise: Promise<boolean> | null = null;
@@ -24,12 +25,21 @@ function rootPrefixForRole(role: UserRole): string {
 }
 
 function App() {
+  const isDfdRenderRoute =
+    typeof window !== 'undefined' &&
+    (window.location.pathname === '/dfd-render' || window.location.pathname === '/test_dfd.html');
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUserName, setCurrentUserName] = useState('Utilisateur');
   const [userRole, setUserRole] = useState<UserRole | null>(null);
 
   useEffect(() => {
+    if (isDfdRenderRoute) {
+      setIsAuthLoading(false);
+      setIsAuthenticated(true);
+      return;
+    }
+
     const initAuth = async () => {
       try {
         setIsAuthLoading(true);
@@ -79,7 +89,11 @@ function App() {
     };
 
     initAuth();
-  }, []);
+  }, [isDfdRenderRoute]);
+
+  if (isDfdRenderRoute) {
+    return <DfdRenderPage />;
+  }
 
   const handleLogin = async () => {
     try {
