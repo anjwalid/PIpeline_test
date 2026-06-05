@@ -41,7 +41,6 @@ environment {
 }
 
 stages {
-
     stage('Build Docker Images') {
         steps {
             withCredentials([string(credentialsId: 'vm-desktop-ip', variable: 'VM_IP')]) {
@@ -73,10 +72,14 @@ stages {
         }
         post {
             success {
-                script { buildStatus = "PASS" }
+                script {
+                    buildStatus = "PASS"
+                }
             }
             failure {
-                script { buildStatus = "FAIL" }
+                script {
+                    buildStatus = "FAIL"
+                }
             }
         }
     }
@@ -110,6 +113,7 @@ stages {
                             echo "Push failed, retry $i..."
                             sleep 20
                         done
+
                         echo "FATAL: push failed: $1"
                         exit 1
                     }
@@ -133,7 +137,9 @@ stages {
 
     stage('Deploy VM Desktop') {
         when {
-            expression { return params.SKIP_DEPLOY == false }
+            expression {
+                return params.SKIP_DEPLOY == false
+            }
         }
         steps {
             withCredentials([
@@ -190,6 +196,7 @@ stages {
                     for risky in postgres postgresql postgres_db db database keycloak auth identity node-exporter exporter prometheus; do
                         if echo "${LOCAL_DECLARED}" | grep -qw "${risky}"; then
                             MATCH=0
+
                             for app in ${APP_SERVICES}; do
                                 [ "$app" = "$risky" ] && MATCH=1
                             done
@@ -280,13 +287,11 @@ stages {
 
                     cat ${REPORTS_DIR}/deploy/protected_after.txt || true
 
-                    if diff -q ${REPORTS_DIR}/deploy/protected_before.txt \
-                               ${REPORTS_DIR}/deploy/protected_after.txt > /dev/null; then
+                    if diff -q ${REPORTS_DIR}/deploy/protected_before.txt ${REPORTS_DIR}/deploy/protected_after.txt > /dev/null; then
                         echo "OK : containers proteges INTACTS"
                     else
                         echo "ALERTE : un container protege a bouge !"
-                        diff ${REPORTS_DIR}/deploy/protected_before.txt \
-                             ${REPORTS_DIR}/deploy/protected_after.txt || true
+                        diff ${REPORTS_DIR}/deploy/protected_before.txt ${REPORTS_DIR}/deploy/protected_after.txt || true
                         exit 1
                     fi
 
@@ -299,17 +304,23 @@ stages {
         }
         post {
             success {
-                script { deployStatus = "PASS" }
+                script {
+                    deployStatus = "PASS"
+                }
             }
             failure {
-                script { deployStatus = "FAIL" }
+                script {
+                    deployStatus = "FAIL"
+                }
             }
         }
     }
 
     stage('Deploy Monitoring') {
         when {
-            expression { return params.SKIP_DEPLOY == false }
+            expression {
+                return params.SKIP_DEPLOY == false
+            }
         }
         steps {
             withCredentials([
@@ -381,14 +392,18 @@ stages {
         }
         post {
             failure {
-                script { deployStatus = "FAIL" }
+                script {
+                    deployStatus = "FAIL"
+                }
             }
         }
     }
 
     stage('Health Check') {
         when {
-            expression { return params.SKIP_DEPLOY == false }
+            expression {
+                return params.SKIP_DEPLOY == false
+            }
         }
         steps {
             withCredentials([string(credentialsId: 'vm-desktop-ip', variable: 'VM_IP')]) {
